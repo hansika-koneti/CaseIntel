@@ -1,0 +1,24 @@
+{
+  "feature_names": [
+    "person_count",
+    "vehicle_count",
+    "event_count",
+    "evidence_count",
+    "max_dwell_time_sec",
+    "night_time_flag",
+    "loitering_flag",
+    "unattended_bag_flag",
+    "forced_entry_flag",
+    "speed_max"
+  ],
+  "classes": [
+    "Suspicious Activity",
+    "Unauthorized Access",
+    "Perimeter Breach",
+    "Normal Operation",
+    "Theft / Tampering"
+  ],
+  "accuracy": 0.965,
+  "n_features": 10,
+  "model_version": "xgboost-1.8-caseintel"
+}
