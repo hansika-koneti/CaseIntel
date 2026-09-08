@@ -132,11 +132,13 @@ def get_knowledge_graph(investigation_id: str, db: Session = Depends(get_db)):
             "primary_entity_id": evd.primary_entity_id.split(":", 1)[1] if (evd.primary_entity_id and ":" in evd.primary_entity_id) else evd.primary_entity_id,
             "secondary_entity_id": evd.secondary_entity_id.split(":", 1)[1] if (evd.secondary_entity_id and ":" in evd.secondary_entity_id) else evd.secondary_entity_id,
             "description": evd.description,
+            "event_id": evd.event_id,
         }
         for evd in evidence_db
     ]
 
     camera_id = video_db.camera_id if video_db else (events_db[0].camera_id if events_db else "C-01")
+    active_video_id = inv.active_video_id or (video_db.id if video_db else None)
 
     graph = kg_service.build_graph_from_case(
         investigation_id=inv.id,
@@ -146,6 +148,17 @@ def get_knowledge_graph(investigation_id: str, db: Session = Depends(get_db)):
         events=events,
         evidence=evidence,
         camera_id=camera_id,
+        video_id=active_video_id,
+        investigation_data={
+            "id": inv.id,
+            "case_number": inv.case_number,
+            "incident_type": inv.incident_type,
+            "severity": inv.severity,
+            "status": inv.status,
+            "confidence": inv.confidence,
+            "location": inv.location,
+        },
     )
 
     return graph
+

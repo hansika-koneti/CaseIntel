@@ -546,6 +546,55 @@ function ObjectNode({ data, selected }: NodeProps) {
   );
 }
 
+/**
+ * EvidenceNode: Grounded forensic evidence item.
+ */
+function EvidenceNode({ data, selected }: NodeProps) {
+  const label = (data.label as string) || (data.evidence_type as string) || 'Key Evidence';
+  const isKey = Boolean(data.is_key_evidence ?? data.suspicious ?? false);
+
+  return (
+    <div
+      style={{
+        border: selected ? '2px solid #8b5cf6' : (isKey ? '1.5px solid #a855f7' : '1.5px solid #cbd5e1'),
+        background: '#ffffff',
+        borderRadius: 10,
+        padding: '10px 14px',
+        minWidth: 170,
+        maxWidth: 210,
+        boxShadow: selected ? '0 0 0 3px rgba(139, 92, 246, 0.2)' : '0 2px 8px rgba(0,0,0,0.05)',
+        transition: 'all 0.15s ease',
+        position: 'relative',
+      }}
+    >
+      <Handle type="target" position={Position.Left} id="left" style={{ background: '#8b5cf6', width: 7, height: 7 }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <div
+          style={{
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            background: isKey ? '#f3e8ff' : '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: `1px solid ${isKey ? '#d8b4fe' : '#e2e8f0'}`,
+          }}
+        >
+          <CheckCircle2 size={13} style={{ color: isKey ? '#9333ea' : '#64748b' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', lineHeight: 1.2 }}>{label}</div>
+          <div style={{ fontSize: 9, fontWeight: 600, color: isKey ? '#9333ea' : '#64748b', textTransform: 'uppercase' }}>
+            {isKey ? 'KEY FORENSIC EVIDENCE' : 'SUPPORTING EVIDENCE'}
+          </div>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Right} id="right" style={{ background: '#8b5cf6', width: 7, height: 7 }} />
+    </div>
+  );
+}
+
 const customNodeTypes = {
   person: SubjectNode,
   vehicle: SubjectNode,
@@ -556,6 +605,7 @@ const customNodeTypes = {
   location: LocationNode,
   timestamp: TimestampNode,
   activity: EventNode,
+  evidence: EvidenceNode,
 };
 
 type ViewMode = 'investigator' | 'topology';
@@ -983,7 +1033,7 @@ export default function KnowledgeGraphPage() {
           <div className="flex items-center gap-2 text-[10px] text-slate-600 pl-2 border-l border-slate-200">
             <span className={`inline-block w-2 h-2 rounded-full ${neo4jConnected ? 'bg-emerald-500' : 'bg-blue-500'}`} />
             <span className="font-mono font-medium">
-              {neo4jConnected ? 'Graph Engine: Neo4j Live' : 'Graph Engine: In-Memory Forensic Topology'}
+              {neo4jConnected ? 'Graph Engine: Neo4j' : 'Graph Engine: In-Memory Forensic Topology'}
             </span>
           </div>
 
