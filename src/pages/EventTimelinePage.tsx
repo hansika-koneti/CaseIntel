@@ -221,9 +221,14 @@ export default function EventTimelinePage() {
 
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <span className="font-mono text-[12px] font-bold" style={{ color: '#0f172a' }}>{event.entityId}</span>
                       <EntityTypeBadge type={event.entityType} />
+                      {event.relatedEntityId && (
+                        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                          ↔ {event.relatedEntityId}
+                        </span>
+                      )}
                       {event.isSuspicious && (
                         <span className="badge badge-red text-[10px] flex items-center gap-1">
                           <AlertTriangle size={9} />SUSPICIOUS

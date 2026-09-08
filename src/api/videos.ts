@@ -38,7 +38,21 @@ export interface VideoUploadResponse {
 export interface VideoStatusResponse {
   videoId: string;
   status: string;
-  pipelineStages: Array<{
+  progress?: number;
+  stage?: string;
+  stageDescription?: string;
+  currentTimeSec?: number;
+  durationSec?: number;
+  entitiesCount?: number;
+  eventsCount?: number;
+  incidentType?: string;
+  severity?: string;
+  confidence?: number;
+  filename?: string;
+  cameraId?: string;
+  location?: string;
+  error?: string | null;
+  pipelineStages?: Array<{
     id: string;
     label: string;
     status: 'pending' | 'processing' | 'completed' | 'error';
@@ -46,8 +60,8 @@ export interface VideoStatusResponse {
     processingTimeMs?: number;
     detail?: string;
   }>;
-  completedStages: number;
-  totalStages: number;
+  completedStages?: number;
+  totalStages?: number;
   resultSummary?: string;
 }
 

@@ -318,18 +318,39 @@ export default function InvestigationReportPage() {
 
       {/* Incident Classification */}
       <Section title="Incident Classification">
-        <div className="flex items-start gap-8">
-          <div className="space-y-3 flex-1">
-            <div className="flex items-center gap-3">
-              <div className="text-[20px] font-bold" style={{ color: '#0f172a' }}>{inv.incident.type}</div>
-              <SeverityBadge severity={inv.incident.severity} />
+        <div className="space-y-4">
+          <div className="flex items-start justify-between gap-6 flex-wrap">
+            <div className="space-y-2 flex-1">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="text-[20px] font-bold" style={{ color: '#0f172a' }}>{inv.incident.type}</div>
+                <SeverityBadge severity={inv.incident.severity} />
+                {(inv.incident.is_hypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theft_visually_verified)) && (
+                  <span className="badge badge-amber text-[10px] uppercase font-bold">
+                    Model Hypothesis (Unverified)
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <ConfidenceMeter value={inv.incident.confidence} size="md" className="max-w-64 flex-1" />
+                <span className="font-mono text-[12px] font-semibold text-slate-700">{inv.incident.confidence}% Model Confidence</span>
+              </div>
             </div>
-            <ConfidenceMeter value={inv.incident.confidence} size="md" className="max-w-64" />
+            <div className="alert-danger p-3 flex items-center gap-2">
+              <AlertTriangle size={13} />
+              <span className="text-[12px] font-semibold">{inv.incident.severity} SEVERITY</span>
+            </div>
           </div>
-          <div className="alert-danger p-3 flex items-center gap-2">
-            <AlertTriangle size={13} />
-            <span className="text-[12px] font-semibold">{inv.incident.severity} SEVERITY</span>
-          </div>
+
+          {(inv.incident.is_hypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theft_visually_verified)) && (
+            <div className="p-3 rounded-lg border border-amber-200 bg-amber-50/70 text-[11px] text-amber-900 flex items-start gap-2">
+              <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <strong>Forensic Evidence Grounding:</strong> Approach, physical confrontation, and phone manipulation were verified.
+                However, <strong>object disappearance was not visually established in the footage</strong>.
+                This incident is recorded as an automated hypothesis requiring investigator confirmation.
+              </div>
+            </div>
+          )}
         </div>
       </Section>
 

@@ -26,9 +26,11 @@ def clean_entity_label(label: Optional[str], ent_id: str, ent_type: str) -> str:
     if ":" in raw:
         raw = raw.split(":", 1)[1].strip()
     
-    # Remove repeated 'Person' or 'Vehicle' prefixes
+    # Remove repeated 'Person', 'Vehicle', or 'Object' prefixes
     raw = re.sub(r'^(Person\s*#?\s*)+', 'Person-', raw, flags=re.IGNORECASE)
     raw = re.sub(r'^(Vehicle\s*#?\s*)+', 'Vehicle-', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^(Object\s*#?\s*)+', 'Object-', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^(Phone\s*#?\s*)+', 'Phone-', raw, flags=re.IGNORECASE)
     raw = re.sub(r'-+', '-', raw)
     raw = re.sub(r'^Person-Person-', 'Person-', raw, flags=re.IGNORECASE)
     raw = re.sub(r'^Vehicle-Vehicle-', 'Vehicle-', raw, flags=re.IGNORECASE)
@@ -39,9 +41,13 @@ def clean_entity_label(label: Optional[str], ent_id: str, ent_type: str) -> str:
     elif ent_type in ["vehicle", "car", "truck"]:
         if not re.search(r'vehicle|car|truck', raw, flags=re.IGNORECASE):
             raw = f"Vehicle-{raw}"
+    elif ent_type in ["object", "phone"]:
+        if not re.search(r'phone|object', raw, flags=re.IGNORECASE):
+            raw = f"Object-{raw}"
             
     raw = re.sub(r'Person-\s*', 'Person-', raw, flags=re.IGNORECASE)
     raw = re.sub(r'Vehicle-\s*', 'Vehicle-', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'Object-\s*', 'Object-', raw, flags=re.IGNORECASE)
     return raw
 
 
@@ -200,30 +206,34 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                 details[cam_id]["relationships"].append(f"LOCATED_AT → {normalized_loc}")
                 details[loc_id]["relationships"].append(f"MONITORED_BY → {cam_label}")
 
-        # 3. Primary Subject Nodes (Persons & Vehicles in Center Column)
+        # 3. Primary Subject Nodes (Persons, Vehicles & Key Objects in Center Column)
         person_nodes = []
         vehicle_nodes = []
+        object_nodes = []
 
         for idx, ent in enumerate(entities):
             ent_id = ent.get("id") or f"ENT-{idx+1:02d}"
             ent_type = ent.get("type", "person").lower()
+            clean_type = "object" if ent_type in ["object", "phone"] else ("vehicle" if ent_type in ["vehicle", "car", "truck"] else "person")
             conf = float(ent.get("confidence", 95.0))
-            clean_lbl = clean_entity_label(ent.get("label"), ent_id, ent_type)
+            clean_lbl = clean_entity_label(ent.get("label"), ent_id, clean_type)
             first_seen = ent.get("first_seen", "00:00")
             last_seen = ent.get("last_seen", "00:16")
             track_duration = ent.get("track_duration") or f"{first_seen} - {last_seen}"
 
             y_pos = 140 + idx * 240
 
-            if ent_type == "person":
+            if clean_type == "person":
                 person_nodes.append(ent_id)
-            elif ent_type in ["vehicle", "car", "truck"]:
+            elif clean_type == "vehicle":
                 vehicle_nodes.append(ent_id)
+            elif clean_type == "object":
+                object_nodes.append(ent_id)
 
             nodes.append({
                 "id": ent_id,
                 "label": clean_lbl,
-                "type": ent_type,
+                "type": clean_type,
                 "category": "primary",
                 "is_technical": False,
                 "confidence": conf,
@@ -232,7 +242,7 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                 "data": {
                     "raw_id": ent_id,
                     "label": clean_lbl,
-                    "type": ent_type,
+                    "type": clean_type,
                     "category": "primary",
                     "confidence": conf,
                     "first_seen": first_seen,
@@ -393,14 +403,31 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                 })
                 details[evt_id]["relationships"].append(f"PERFORMED_BY ← {primary_ent}")
 
+            # Multi-entity inference from action context if not explicitly provided
+            act_lower = action.lower()
+            desc_lower = desc.lower()
+
+            # Physical Altercation: Link secondary person (e.g. Person-02)
+            if any(w in act_lower or w in desc_lower for w in ["altercation", "confrontation", "physical interaction"]):
+                if not sec_ent and person_nodes:
+                    other_persons = [p for p in person_nodes if p != primary_ent]
+                    if other_persons:
+                        sec_ent = other_persons[0]
+
+            # Object Interaction: Link secondary object (e.g. Phone-01)
+            target_object = None
+            if any(w in act_lower or w in desc_lower for w in ["object interaction", "phone", "device", "item"]):
+                if object_nodes:
+                    target_object = object_nodes[0]
+
             # Edge: Event -> Target Entity (TARGETED / INVOLVED)
             if sec_ent and any(n["id"] == sec_ent for n in nodes):
                 edges.append({
                     "id": f"e_rel_{evt_id}_{sec_ent}",
                     "source": evt_id,
                     "target": sec_ent,
-                    "relationship": "INVOLVED",
-                    "label": "INVOLVED",
+                    "relationship": "PARTICIPATED_IN" if "altercation" in act_lower else "INVOLVED",
+                    "label": "PARTICIPATED IN" if "altercation" in act_lower else "INVOLVED",
                     "suspicious": is_suspicious,
                     "reason": susp_reason,
                     "category": "primary",
@@ -409,6 +436,59 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                 details[evt_id]["relationships"].append(f"INVOLVED → {sec_ent}")
                 if sec_ent in details:
                     details[sec_ent]["relationships"].append(f"SUBJECT_OF ← {action}")
+
+                # Cross-entity edge: Primary Subject <-> Secondary Subject
+                if primary_ent and any(n["id"] == primary_ent for n in nodes):
+                    cross_id = f"e_cross_{primary_ent}_{sec_ent}"
+                    if not any(e["id"] == cross_id for e in edges):
+                        edges.append({
+                            "id": cross_id,
+                            "source": primary_ent,
+                            "target": sec_ent,
+                            "relationship": "CONFRONTED",
+                            "label": "ALTERCATION / CONTACT",
+                            "suspicious": True,
+                            "reason": "Physical confrontation / close spatial interaction verified",
+                            "category": "primary",
+                            "is_technical": False,
+                        })
+                        if primary_ent in details:
+                            details[primary_ent]["relationships"].append(f"CONFRONTED → {sec_ent}")
+
+            # Edge: Event -> Target Object (INVOLVES_OBJECT)
+            if target_object and any(n["id"] == target_object for n in nodes):
+                edges.append({
+                    "id": f"e_obj_{evt_id}_{target_object}",
+                    "source": evt_id,
+                    "target": target_object,
+                    "relationship": "INVOLVES_OBJECT",
+                    "label": "INVOLVES OBJECT",
+                    "suspicious": is_suspicious,
+                    "reason": desc,
+                    "category": "primary",
+                    "is_technical": False,
+                })
+                details[evt_id]["relationships"].append(f"INVOLVES_OBJECT → {target_object}")
+                if target_object in details:
+                    details[target_object]["relationships"].append(f"INVOLVED_IN ← {action}")
+
+                # Cross-entity edge: Primary Subject -> Object (MANIPULATED)
+                if primary_ent and any(n["id"] == primary_ent for n in nodes):
+                    obj_cross_id = f"e_cross_{primary_ent}_{target_object}"
+                    if not any(e["id"] == obj_cross_id for e in edges):
+                        edges.append({
+                            "id": obj_cross_id,
+                            "source": primary_ent,
+                            "target": target_object,
+                            "relationship": "MANIPULATED",
+                            "label": "MANIPULATED",
+                            "suspicious": is_suspicious,
+                            "reason": "Hand-to-object spatial manipulation detected",
+                            "category": "primary",
+                            "is_technical": False,
+                        })
+                        if primary_ent in details:
+                            details[primary_ent]["relationships"].append(f"MANIPULATED → {target_object}")
 
             # Edge: Event(i) -> Event(i+1) (THEN / Chronological Sequence)
             if prev_event_node_id:
@@ -478,13 +558,17 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
             "edges": edges,
             "entity_details": details,
             "summary": {
-                "subjects": len(person_nodes) + len(vehicle_nodes),
+                "subjects": len(person_nodes) + len(vehicle_nodes) + len(object_nodes),
+                "people": len(person_nodes),
+                "vehicles": len(vehicle_nodes),
+                "objects": len(object_nodes),
                 "cameras": 1 if cam_id else 0,
                 "locations": 1 if normalized_loc else 0,
                 "events": len(sorted_events),
                 "suspicious_events": sum(1 for e in sorted_events if e.get("is_suspicious")),
             },
             "neo4j_connected": self.is_connected,
+            "graph_engine": "Neo4j Graph Engine" if self.is_connected else "In-Memory Forensic Topology",
         }
 
     def _sync_to_neo4j(self, investigation_id: str, nodes: List[Dict], edges: List[Dict]):

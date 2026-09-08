@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, Maximize2, AlertTriangle, User, Car, Camera, Loader2, Video as VideoIcon } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Maximize2, AlertTriangle, User, Car, Smartphone, Camera, Loader2, Video as VideoIcon } from 'lucide-react';
 import { getInvestigation, setActiveVideo } from '../api/investigations';
 import { getVideoInfo } from '../api/videos';
 import type { Investigation, Entity } from '../types';
@@ -146,15 +146,37 @@ export default function VideoAnalysisPage() {
       if (videoRef.current) {
         const cur = videoRef.current.currentTime;
         setCurrentTimeSec(cur);
-        const m = Math.floor(cur / 60);
+        const h = Math.floor(cur / 3600);
+        const m = Math.floor((cur % 3600) / 60);
         const s = Math.floor(cur % 60);
-        setCurrentTimeFormatted(`${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`);
+        const formatted = (durationSec >= 3600 || h > 0)
+          ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+          : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        setCurrentTimeFormatted(formatted);
       }
       animId = requestAnimationFrame(tick);
     };
     animId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animId);
   }, [playing]);
+
+  // Pre-sort and index trajectories once per entity list update rather than on every 60 FPS animation frame
+  // Positioned at the top level with all React hooks to strictly adhere to React Rules of Hooks
+  const entityTrajectories = useMemo(() => {
+    if (!inv?.entities) return new Map<string, Array<any>>();
+    const map = new Map<string, Array<any>>();
+    for (const e of inv.entities) {
+      const traj = e.trajectory || [];
+      if (traj.length > 0) {
+        const sorted = [...traj].map(pt => ({
+          ...pt,
+          t: (pt as any).timestampSec ?? (pt as any).timestamp_sec ?? (pt.frame / 25),
+        })).sort((a, b) => a.t - b.t);
+        map.set(e.id, sorted);
+      }
+    }
+    return map;
+  }, [inv?.entities]);
 
   const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://127.0.0.1:8000';
   const urlVideoId = searchParams.get('video_id');
@@ -395,7 +417,6 @@ export default function VideoAnalysisPage() {
     }
   };
 
-
   // Dynamic entity position based on video current time and real ByteTrack trajectory.
   // Entities are scoped to the active video to prevent leakage between different uploaded videos.
   const detections = inv.entities
@@ -407,24 +428,22 @@ export default function VideoAnalysisPage() {
       let w = 0;
       let h = 0;
 
-      const traj = e.trajectory || [];
-      if (traj.length > 0) {
-        const sorted = [...traj].map(pt => ({
-          ...pt,
-          t: (pt as any).timestampSec ?? (pt as any).timestamp_sec ?? (pt.frame / 25),
-        })).sort((a, b) => a.t - b.t);
-
-        // Find points bracketing currentTimeSec
+      const sorted = entityTrajectories.get(e.id);
+      if (sorted && sorted.length > 0) {
+        // Fast binary search to find points bracketing currentTimeSec in O(log N)
+        let low = 0;
+        let high = sorted.length - 1;
         let prevPt = sorted[0];
         let nextPt = sorted[sorted.length - 1];
 
-        for (let i = 0; i < sorted.length; i++) {
-          if (sorted[i].t <= currentTimeSec) {
-            prevPt = sorted[i];
-          }
-          if (sorted[i].t >= currentTimeSec) {
-            nextPt = sorted[i];
-            break;
+        while (low <= high) {
+          const mid = Math.floor((low + high) / 2);
+          if (sorted[mid].t <= currentTimeSec) {
+            prevPt = sorted[mid];
+            low = mid + 1;
+          } else {
+            nextPt = sorted[mid];
+            high = mid - 1;
           }
         }
 
@@ -769,12 +788,14 @@ export default function VideoAnalysisPage() {
         <div className="space-y-4">
           {/* Detected Entities */}
           <div className="card p-4">
-            <div className="section-label mb-3">Detected Entities ({inv.entities.filter(e => ['person', 'vehicle'].includes(e.type)).length})</div>
-            {inv.entities.filter(e => ['person', 'vehicle'].includes(e.type)).length === 0 ? (
+            <div className="section-label mb-3">
+              Detected Entities ({inv.entities.filter(e => ['person', 'vehicle', 'car', 'truck', 'object', 'phone'].includes(e.type)).length})
+            </div>
+            {inv.entities.filter(e => ['person', 'vehicle', 'car', 'truck', 'object', 'phone'].includes(e.type)).length === 0 ? (
               <div className="text-[12px] text-slate-500 py-3 text-center">No entities detected in this video feed.</div>
             ) : (
               <div className="space-y-2">
-                {inv.entities.filter(e => ['person', 'vehicle'].includes(e.type)).map(ent => (
+                {inv.entities.filter(e => ['person', 'vehicle', 'car', 'truck', 'object', 'phone'].includes(e.type)).map(ent => (
                   <div
                     key={ent.id}
                     onClick={() => setSelectedEntity(ent.id)}
@@ -786,9 +807,13 @@ export default function VideoAnalysisPage() {
                   >
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2">
-                        {ent.type === 'person'
-                          ? <User size={12} style={{ color: '#2563eb' }} />
-                          : <Car size={12} style={{ color: '#7c3aed' }} />}
+                        {ent.type === 'person' ? (
+                          <User size={12} style={{ color: '#2563eb' }} />
+                        ) : ent.type === 'object' || ent.type === 'phone' ? (
+                          <Smartphone size={12} style={{ color: '#0891b2' }} />
+                        ) : (
+                          <Car size={12} style={{ color: '#7c3aed' }} />
+                        )}
                         <span className="font-mono text-[12px] font-bold" style={{ color: '#0f172a' }}>{ent.id}</span>
                       </div>
                       <EntityTypeBadge type={ent.type} />

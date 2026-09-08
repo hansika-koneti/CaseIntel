@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, Settings, CheckCircle, Circle, Loader, AlertCircle, Video } from 'lucide-react';
-import { uploadVideo, analyzeVideo, type VideoUploadResponse } from '../api/videos';
+import { uploadVideo, analyzeVideo, getVideoStatus, type VideoUploadResponse } from '../api/videos';
 import type { PipelineStage } from '../types';
 import { clsx } from 'clsx';
 
@@ -137,9 +137,35 @@ export default function CCTVAnalysisPage() {
         }
       }, 1200);
 
+      // Poll real backend pipeline status during execution
+      const pollTimer = setInterval(async () => {
+        try {
+          const st = await getVideoStatus(uploadRes.videoId);
+          if (st && st.stage && st.stage !== 'none' && st.stage !== 'completed') {
+            setStageProcessing(st.stage);
+            if (st.progress !== undefined) {
+              setStages(prev => prev.map(s => {
+                if (s.id === st.stage) {
+                  return { ...s, status: 'processing' as const, progress: Math.min(99, Math.round(st.progress!)), detail: st.stageDescription || s.detail };
+                }
+                const curIdx = STAGE_ORDER.indexOf(st.stage!);
+                const sIdx = STAGE_ORDER.indexOf(s.id);
+                if (curIdx > -1 && sIdx > -1 && sIdx < curIdx) {
+                  return { ...s, status: 'completed' as const, progress: 100 };
+                }
+                return s;
+              }));
+            }
+          }
+        } catch {
+          // ignore transient poll error
+        }
+      }, 800);
+
       const t1 = Date.now();
       const analysisRes = await analyzeVideo(uploadRes.videoId, { cameraId, location, analysisMode });
       clearInterval(advanceTimer);
+      clearInterval(pollTimer);
       const elapsed = Date.now() - t1;
 
       const entList = Array.isArray(analysisRes.entities) ? analysisRes.entities : [];

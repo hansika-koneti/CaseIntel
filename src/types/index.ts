@@ -11,7 +11,7 @@ export type InvestigationStatus =
 
 export type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
-export type EntityType = 'person' | 'vehicle' | 'camera' | 'location' | 'event' | 'activity' | 'timestamp';
+export type EntityType = 'person' | 'vehicle' | 'camera' | 'location' | 'event' | 'activity' | 'timestamp' | 'object';
 
 export type PipelineStageStatus = 'pending' | 'processing' | 'completed' | 'error';
 
@@ -88,16 +88,49 @@ export interface FeatureContribution {
   direction: 'positive' | 'negative';
 }
 
+export interface ForensicRuleStep {
+  step: number;
+  name: string;
+  status: 'detected' | 'unverified' | 'detected_or_observed' | 'not_detected' | string;
+  detail: string;
+}
+
+export interface VerifiedObservation {
+  action: string;
+  confidence: number;
+  severity: string;
+  description: string;
+  timestamp: string;
+  entity_id: string;
+}
+
 export interface IncidentResult {
   type: string | null;
   confidence: number;
   severity: Severity | null;
+  incident_risk_score?: number;
+  incidentRiskScore?: number;
   featureContributions: FeatureContribution[];
   reasoning: string;
   classifierVersion: string;
   has_analysis?: boolean;
   hasAnalysis?: boolean;
   status?: string;
+  theft_visually_verified?: boolean;
+  theftVisuallyVerified?: boolean;
+  is_hypothesis?: boolean;
+  isHypothesis?: boolean;
+  hypothesis_status?: string;
+  hypothesisStatus?: string;
+  visual_evidence_summary?: string;
+  visualEvidenceSummary?: string;
+  forensic_rule_evaluation?: ForensicRuleStep[];
+  forensicRuleEvaluation?: ForensicRuleStep[];
+  verified_observations?: VerifiedObservation[];
+  verifiedObservations?: VerifiedObservation[];
+  class_probabilities?: Record<string, number>;
+  extracted_features?: Record<string, number>;
+  base_value?: number;
 }
 
 // ── Knowledge Graph ──────────────────────────────────────────

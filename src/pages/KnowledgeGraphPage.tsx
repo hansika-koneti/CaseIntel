@@ -19,6 +19,7 @@ import 'reactflow/dist/style.css';
 import {
   User,
   Car,
+  Smartphone,
   Camera,
   MapPin,
   Zap,
@@ -452,9 +453,104 @@ function TimestampNode({ data, selected }: NodeProps) {
   );
 }
 
+/**
+ * ObjectNode: Key Monitored Object / Property (e.g. Phone-01).
+ * Features cyan border, smartphone icon, and confidence indicator.
+ */
+function ObjectNode({ data, selected }: NodeProps) {
+  const label = (data.label as string) || (data.raw_id as string) || 'Object';
+  const conf = data.confidence != null ? Number(data.confidence) : 90.0;
+
+  return (
+    <div
+      style={{
+        border: selected ? '2px solid #0891b2' : '2px solid #06b6d4',
+        background: '#ffffff',
+        borderRadius: 12,
+        padding: '12px 16px',
+        minWidth: 190,
+        maxWidth: 230,
+        boxShadow: selected
+          ? '0 0 0 4px rgba(8, 145, 178, 0.25), 0 8px 24px rgba(8, 145, 178, 0.18)'
+          : '0 4px 16px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05)',
+        transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+        position: 'relative',
+      }}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="left"
+        style={{ background: '#0891b2', width: 8, height: 8, border: '2px solid #ffffff' }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <div
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            background: '#ecfeff',
+            border: '1px solid #a5f3fc',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Smartphone size={18} style={{ color: '#0891b2' }} />
+        </div>
+        <div>
+          <div
+            style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 14,
+              fontWeight: 800,
+              color: '#0f172a',
+              lineHeight: 1.2,
+            }}
+          >
+            {label}
+          </div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: '#0e7490', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            KEY PROPERTY / OBJECT
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#64748b', marginBottom: 2 }}>
+          <span>Detection Confidence</span>
+          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, color: '#0891b2' }}>
+            {conf.toFixed(1)}%
+          </span>
+        </div>
+        <div style={{ height: 4, background: '#f1f5f9', borderRadius: 2, overflow: 'hidden' }}>
+          <div
+            style={{
+              height: '100%',
+              width: `${Math.min(100, Math.max(10, conf))}%`,
+              background: '#0891b2',
+              borderRadius: 2,
+            }}
+          />
+        </div>
+      </div>
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="right"
+        style={{ background: '#0891b2', width: 8, height: 8, border: '2px solid #ffffff' }}
+      />
+    </div>
+  );
+}
+
 const customNodeTypes = {
   person: SubjectNode,
   vehicle: SubjectNode,
+  object: ObjectNode,
+  phone: ObjectNode,
   event: EventNode,
   camera: CameraNode,
   location: LocationNode,
@@ -463,7 +559,7 @@ const customNodeTypes = {
 };
 
 type ViewMode = 'investigator' | 'topology';
-type FilterType = 'all' | 'people' | 'vehicles' | 'events' | 'suspicious';
+type FilterType = 'all' | 'people' | 'vehicles' | 'objects' | 'events' | 'suspicious';
 
 export default function KnowledgeGraphPage() {
   const [inv, setInv] = useState<Investigation | null>(null);
@@ -571,6 +667,8 @@ export default function KnowledgeGraphPage() {
       // Map edges with investigator styling
       const mappedEdges: Edge[] = (graphData.edges || []).map(e => {
         const isSusp = Boolean(e.suspicious);
+        const isSeq = e.relationship === 'THEN';
+        const isObj = e.relationship === 'INVOLVES_OBJECT' || e.relationship === 'MANIPULATED';
         const isTech = Boolean(e.is_technical || (e as any).isTechnical || e.relationship === 'OCCURRED_AT');
         const edgeReason = e.reason || (isSusp ? 'Suspicious behavioral transition' : undefined);
         return {
@@ -578,7 +676,7 @@ export default function KnowledgeGraphPage() {
           source: e.source,
           target: e.target,
           label: e.label || e.relationship,
-          animated: isSusp,
+          animated: isSusp || isSeq,
           data: {
             relationship: e.relationship,
             suspicious: isSusp,
@@ -587,25 +685,29 @@ export default function KnowledgeGraphPage() {
           },
           style: isSusp
             ? { stroke: '#dc2626', strokeWidth: 2.2, strokeDasharray: '6 3' }
+            : isSeq
+            ? { stroke: '#0891b2', strokeWidth: 2, strokeDasharray: '4 4' }
+            : isObj
+            ? { stroke: '#0891b2', strokeWidth: 1.8 }
             : isTech
             ? { stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }
             : { stroke: '#94a3b8', strokeWidth: 1.6 },
           labelStyle: {
-            fill: isSusp ? '#b91c1c' : '#64748b',
+            fill: isSusp ? '#b91c1c' : isSeq ? '#0891b2' : isObj ? '#0891b2' : '#64748b',
             fontSize: 9,
             fontFamily: 'JetBrains Mono, monospace',
-            fontWeight: isSusp ? 700 : 500,
+            fontWeight: (isSusp || isSeq) ? 700 : 500,
           },
           labelBgStyle: {
-            fill: isSusp ? '#fee2e2' : '#f8fafc',
-            stroke: isSusp ? '#fca5a5' : '#e2e8f0',
+            fill: isSusp ? '#fee2e2' : isSeq ? '#ecfeff' : isObj ? '#ecfeff' : '#f8fafc',
+            stroke: isSusp ? '#fca5a5' : isSeq ? '#a5f3fc' : isObj ? '#a5f3fc' : '#e2e8f0',
             strokeWidth: 1,
             rx: 4,
             ry: 4,
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
-            color: isSusp ? '#dc2626' : isTech ? '#94a3b8' : '#64748b',
+            color: isSusp ? '#dc2626' : isSeq ? '#0891b2' : isObj ? '#0891b2' : isTech ? '#94a3b8' : '#64748b',
             width: 10,
             height: 10,
           },
@@ -663,6 +765,8 @@ export default function KnowledgeGraphPage() {
       filteredNodes = filteredNodes.filter(n => n.data.type === 'person' || n.data.type === 'camera' || n.data.type === 'location');
     } else if (filter === 'vehicles') {
       filteredNodes = filteredNodes.filter(n => n.data.type === 'vehicle' || n.data.type === 'camera' || n.data.type === 'location');
+    } else if (filter === 'objects') {
+      filteredNodes = filteredNodes.filter(n => n.data.type === 'object' || n.data.type === 'phone' || n.data.type === 'camera' || n.data.type === 'location');
     } else if (filter === 'events') {
       filteredNodes = filteredNodes.filter(n => n.data.type === 'event' || n.data.type === 'activity');
     } else if (filter === 'suspicious') {
@@ -723,12 +827,13 @@ export default function KnowledgeGraphPage() {
   // Selected Node Details
   const selectedDetails = selectedNode ? detailsMap[selectedNode.id] || selectedNode.data : null;
   const isEventNode = selectedNode?.data?.type === 'event' || selectedNode?.data?.type === 'activity';
-  const isSubjectNode = selectedNode?.data?.type === 'person' || selectedNode?.data?.type === 'vehicle';
+  const isSubjectNode = selectedNode?.data?.type === 'person' || selectedNode?.data?.type === 'vehicle' || selectedNode?.data?.type === 'object' || selectedNode?.data?.type === 'phone';
 
   // Counts for quick filter pills
   const counts = useMemo(() => {
     let people = 0;
     let vehicles = 0;
+    let objects = 0;
     let events = 0;
     let suspicious = 0;
 
@@ -736,6 +841,7 @@ export default function KnowledgeGraphPage() {
       const t = String(n.data.type || '').toLowerCase();
       if (t === 'person') people++;
       if (t === 'vehicle' || t === 'car' || t === 'truck') vehicles++;
+      if (t === 'object' || t === 'phone') objects++;
       if (t === 'event' || t === 'activity') {
         events++;
         const isSusp = Boolean(n.data.is_suspicious || n.data.isSuspicious || n.data.suspicious);
@@ -743,7 +849,7 @@ export default function KnowledgeGraphPage() {
       }
     });
 
-    return { people, vehicles, events, suspicious, total: rawNodes.length };
+    return { people, vehicles, objects, events, suspicious, total: rawNodes.length };
   }, [rawNodes]);
 
 
@@ -821,6 +927,7 @@ export default function KnowledgeGraphPage() {
               { id: 'all', label: 'All' },
               { id: 'people', label: `People (${counts.people})` },
               ...(counts.vehicles > 0 ? [{ id: 'vehicles', label: `Vehicles (${counts.vehicles})` }] : []),
+              ...(counts.objects > 0 ? [{ id: 'objects', label: `Objects (${counts.objects})` }] : []),
               { id: 'events', label: `Events (${counts.events})` },
               { id: 'suspicious', label: `Suspicious Only (${counts.suspicious})`, alert: counts.suspicious > 0 },
             ].map(f => (
@@ -873,9 +980,11 @@ export default function KnowledgeGraphPage() {
             <span>Fit View</span>
           </button>
 
-          <div className="flex items-center gap-2 text-[10px] text-slate-500 pl-1 border-l border-slate-200">
-            <span className={`inline-block w-2 h-2 rounded-full ${neo4jConnected ? 'bg-emerald-500' : 'bg-slate-400'}`} />
-            <span>{neo4jConnected ? 'Neo4j Live' : 'In-Memory Graph Engine (Local Fallback)'}</span>
+          <div className="flex items-center gap-2 text-[10px] text-slate-600 pl-2 border-l border-slate-200">
+            <span className={`inline-block w-2 h-2 rounded-full ${neo4jConnected ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+            <span className="font-mono font-medium">
+              {neo4jConnected ? 'Graph Engine: Neo4j Live' : 'Graph Engine: In-Memory Forensic Topology'}
+            </span>
           </div>
 
         </div>
@@ -933,6 +1042,7 @@ export default function KnowledgeGraphPage() {
                   if (n.data?.is_suspicious) return '#dc2626';
                   if (n.data?.type === 'person') return '#2563eb';
                   if (n.data?.type === 'vehicle') return '#7c3aed';
+                  if (n.data?.type === 'object' || n.data?.type === 'phone') return '#0891b2';
                   if (n.data?.type === 'camera') return '#db2777';
                   if (n.data?.type === 'location') return '#16a34a';
                   if (n.data?.type === 'event') return '#d97706';
@@ -956,6 +1066,10 @@ export default function KnowledgeGraphPage() {
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-blue-600" />
                 <span>Primary Subject</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#0891b2' }} />
+                <span>Object / Property</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />

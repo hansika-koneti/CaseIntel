@@ -1,7 +1,9 @@
 import sqlite3
+import os
 
 def run_migration():
-    conn = sqlite3.connect('backend/caseintel.db')
+    db_path = os.path.join(os.path.dirname(__file__), 'caseintel.db')
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
     # 1. Add active_video_id to investigations

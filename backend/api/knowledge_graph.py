@@ -27,12 +27,21 @@ def get_knowledge_graph(investigation_id: str, db: Session = Depends(get_db)):
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation not found")
 
-    entities_db = db.query(EntityModel).filter(EntityModel.investigation_id == inv.id).all()
-    events_db = db.query(EventModel).filter(EventModel.investigation_id == inv.id).all()
-    evidence_db = db.query(EvidenceModel).filter(EvidenceModel.investigation_id == inv.id).all()
     video_db = None
     if inv.active_video_id:
         video_db = db.query(VideoModel).filter(VideoModel.id == inv.active_video_id, VideoModel.investigation_id == inv.id).first()
+        entities_db = db.query(EntityModel).filter(EntityModel.investigation_id == inv.id, EntityModel.video_id == inv.active_video_id).all()
+        events_db = db.query(EventModel).filter(EventModel.investigation_id == inv.id, EventModel.video_id == inv.active_video_id).all()
+        evidence_db = db.query(EvidenceModel).filter(EvidenceModel.investigation_id == inv.id, EvidenceModel.video_id == inv.active_video_id).all()
+        if not entities_db and not events_db:
+            entities_db = db.query(EntityModel).filter(EntityModel.investigation_id == inv.id).all()
+            events_db = db.query(EventModel).filter(EventModel.investigation_id == inv.id).all()
+            evidence_db = db.query(EvidenceModel).filter(EvidenceModel.investigation_id == inv.id).all()
+    else:
+        entities_db = db.query(EntityModel).filter(EntityModel.investigation_id == inv.id).all()
+        events_db = db.query(EventModel).filter(EventModel.investigation_id == inv.id).all()
+        evidence_db = db.query(EvidenceModel).filter(EvidenceModel.investigation_id == inv.id).all()
+
     if not video_db:
         video_db = db.query(VideoModel).filter(VideoModel.investigation_id == inv.id).order_by(VideoModel.uploaded_at.desc()).first()
 
@@ -107,6 +116,7 @@ def get_knowledge_graph(investigation_id: str, db: Session = Depends(get_db)):
             "confidence": ev.confidence,
             "is_suspicious": ev.is_suspicious,
             "primary_entity_id": ev.entity_id.split(":", 1)[1] if (ev.entity_id and ":" in ev.entity_id) else ev.entity_id,
+            "related_entity_id": ev.related_entity_id.split(":", 1)[1] if (ev.related_entity_id and ":" in ev.related_entity_id) else ev.related_entity_id,
             "camera_id": ev.camera_id or (video_db.camera_id if video_db else "C-01"),
             "location": ev.location if ev.location and ev.location not in ["undefined", "null", "Location not specified"] else inv.location,
         }

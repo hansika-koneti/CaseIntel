@@ -114,6 +114,12 @@ def get_incident(investigation_id: str, db: Session = Depends(get_db)):
             "type": None,
             "confidence": 0.0,
             "severity": None,
+            "theft_visually_verified": False,
+            "is_hypothesis": False,
+            "hypothesis_status": None,
+            "visual_evidence_summary": None,
+            "forensic_rule_evaluation": [],
+            "verified_observations": [],
             "feature_contributions": [],
             "positive_contributors": [],
             "negative_contributors": [],
@@ -153,10 +159,13 @@ def get_incident(investigation_id: str, db: Session = Depends(get_db)):
             "id": ev.id,
             "timestamp": ev.timestamp,
             "event_type": ev.action,
+            "action": ev.action,
             "description": ev.description,
             "confidence": ev.confidence,
             "severity": "HIGH" if ev.is_suspicious else "LOW",
+            "is_suspicious": bool(ev.is_suspicious),
             "primary_entity_id": ev.entity_id,
+            "related_entity_id": ev.related_entity_id,
         }
         for ev in events_db
     ]

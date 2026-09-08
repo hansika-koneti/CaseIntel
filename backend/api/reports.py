@@ -92,7 +92,11 @@ def _get_case_payload(inv: InvestigationModel, db: Session):
     # Calculate or retrieve real incident classification only if analysis has occurred
     has_analysis = bool(events or entities or (video_db and video_db.status == "analyzed"))
     if inv.incident_data and isinstance(inv.incident_data, dict) and inv.incident_data.get("has_analysis", True) and inv.incident_data.get("type") and inv.incident_data.get("type") != "Unclassified":
-        incident_result = inv.incident_data
+        incident_result = dict(inv.incident_data)
+        # Enforce calibrated HIGH severity for unverified theft hypothesis
+        if incident_result.get("type") == "Theft / Tampering" and not incident_result.get("theft_visually_verified"):
+            incident_result["severity"] = "HIGH"
+            incident_result["is_hypothesis"] = True
     elif has_analysis and (events or entities):
         incident_result = incident_service.classify(events=events, entities=entities, evidence=evidence)
     else:

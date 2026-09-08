@@ -8,7 +8,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # Default to local persistent SQLite file; easily overridden with PostgreSQL via DATABASE_URL
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./caseintel.db")
+_default_db = os.path.join(os.path.dirname(__file__), "caseintel.db").replace("\\", "/")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{_default_db}")
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):

@@ -7,7 +7,7 @@ multi-object tracking with persistent entity IDs and trajectories.
 import os
 import math
 import cv2
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Callable
 from ultralytics import YOLO
 
 MODEL_PATH = os.getenv("YOLO_WEIGHTS_PATH", "yolo11n.pt")
@@ -72,6 +72,8 @@ class YOLOv11DetectorService:
         video_path: str,
         sample_fps: float = 4.0,
         conf_thresh: float = 0.25,
+        progress_callback: Optional[Callable[[float, int, int], None]] = None,
+        max_retained_frames: int = 1200,
     ) -> Dict[str, Any]:
         """
         Extract frames from video and run YOLOv11 + ByteTrack multi-object tracking.
@@ -111,6 +113,11 @@ class YOLOv11DetectorService:
                 h, w = frame.shape[:2]
                 timestamp_sec = round(frame_idx / fps, 2) if fps > 0 else 0
                 frame_dets = []
+
+                if progress_callback and total_frames > 0:
+                    if frame_idx % (frame_step * 10) == 0 or frame_idx == 0:
+                        pct = min(99.0, round((frame_idx / total_frames) * 100.0, 1))
+                        progress_callback(pct, frame_idx, total_frames)
 
                 if self.model is not None:
                     try:
@@ -212,20 +219,38 @@ class YOLOv11DetectorService:
                                 })
 
 
-                frame_results.append({
-                    "frame": frame_idx,
-                    "timestamp_sec": timestamp_sec,
-                    "detections": frame_dets,
-                })
+                if len(frame_results) < max_retained_frames or frame_dets:
+                    frame_results.append({
+                        "frame": frame_idx,
+                        "timestamp_sec": timestamp_sec,
+                        "detections": frame_dets,
+                    })
 
             frame_idx += 1
 
         cap.release()
+        if progress_callback and total_frames > 0:
+            progress_callback(100.0, total_frames, total_frames)
 
         # Aggregate tracks summary
         tracks_list = []
         for tid, tinfo in tracks_map.items():
             avg_conf = round(sum(tinfo["confidences"]) / len(tinfo["confidences"]), 3)
+            raw_traj = tinfo["trajectory"]
+            # Downsample trajectory points to ~2 Hz (every 0.5s) for long videos (> 200 points)
+            # This maintains fluid video player bounding-box interpolation while keeping memory and DB bounded
+            if len(raw_traj) > 200:
+                sampled_traj = [raw_traj[0]]
+                last_t = raw_traj[0]["timestamp_sec"]
+                for pt in raw_traj[1:-1]:
+                    if pt["timestamp_sec"] - last_t >= 0.5:
+                        sampled_traj.append(pt)
+                        last_t = pt["timestamp_sec"]
+                sampled_traj.append(raw_traj[-1])
+                final_traj = sampled_traj
+            else:
+                final_traj = raw_traj
+
             tracks_list.append({
                 "track_id": tid,
                 "entity_id": tinfo["entity_id"],
@@ -233,8 +258,8 @@ class YOLOv11DetectorService:
                 "avg_confidence": avg_conf,
                 "first_seen_sec": tinfo["first_seen_sec"],
                 "last_seen_sec": tinfo["last_seen_sec"],
-                "observations_count": len(tinfo["trajectory"]),
-                "trajectory": tinfo["trajectory"],
+                "observations_count": len(raw_traj),
+                "trajectory": final_traj,
             })
 
         # Stitch & merge fragmented person tracks (occlusions, crouching, pose transitions)
@@ -374,10 +399,12 @@ class YOLOv11DetectorService:
         video_path: str,
         sample_fps: float = 4.0,
         conf_thresh: float = 0.25,
+        progress_callback: Optional[Callable[[float, int, int], None]] = None,
     ) -> Dict[str, Any]:
         """Runs tracking and detection pipeline on the video."""
         return self.process_video_with_tracking(
             video_path=video_path,
             sample_fps=sample_fps,
             conf_thresh=conf_thresh,
+            progress_callback=progress_callback,
         )

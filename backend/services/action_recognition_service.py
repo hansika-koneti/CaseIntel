@@ -246,27 +246,72 @@ class ActionRecognitionService(ActionRecognitionBaseService):
 
         # 1. Check for stationary dwell (loitering: dwell >= 4.0s, radius < 8.0%)
         dwell_found = None
-        for i in range(len(trajectory)):
-            for j in range(len(trajectory) - 1, i, -1):
-                dur = trajectory[j]["timestamp_sec"] - trajectory[i]["timestamp_sec"]
-                if dur < 4.0:
+        n_pts = len(trajectory)
+        if n_pts <= 120:
+            # Exact identical path for short clips
+            for i in range(n_pts):
+                for j in range(n_pts - 1, i, -1):
+                    dur = trajectory[j]["timestamp_sec"] - trajectory[i]["timestamp_sec"]
+                    if dur < 4.0:
+                        break
+                    pts = trajectory[i:j + 1]
+                    cx = sum(p["x"] for p in pts) / len(pts)
+                    cy = sum(p["y"] for p in pts) / len(pts)
+                    rad = max(math.hypot(p["x"] - cx, p["y"] - cy) for p in pts)
+                    if rad < 8.0:
+                        dwell_found = {
+                            "start_idx": i,
+                            "end_idx": j,
+                            "start_time": trajectory[i]["timestamp_sec"],
+                            "end_time": trajectory[j]["timestamp_sec"],
+                            "duration": round(dur, 1),
+                            "radius": round(rad, 1),
+                        }
+                        break
+                if dwell_found:
                     break
-                pts = trajectory[i:j + 1]
-                cx = sum(p["x"] for p in pts) / len(pts)
-                cy = sum(p["y"] for p in pts) / len(pts)
-                rad = max(math.hypot(p["x"] - cx, p["y"] - cy) for p in pts)
-                if rad < 8.0:
-                    dwell_found = {
-                        "start_idx": i,
-                        "end_idx": j,
-                        "start_time": trajectory[i]["timestamp_sec"],
-                        "end_time": trajectory[j]["timestamp_sec"],
-                        "duration": round(dur, 1),
-                        "radius": round(rad, 1),
-                    }
+        else:
+            # Scalable O(N) sliding window with bounding-box pruning for long CCTV surveillance
+            stride = max(1, int(round(n_pts / 3000)))
+            for i in range(0, n_pts, stride):
+                j_start = i
+                while j_start < n_pts and (trajectory[j_start]["timestamp_sec"] - trajectory[i]["timestamp_sec"]) < 4.0:
+                    j_start += 1
+                if j_start >= n_pts:
                     break
-            if dwell_found:
-                break
+
+                curr_min_x = min(p["x"] for p in trajectory[i:j_start + 1])
+                curr_max_x = max(p["x"] for p in trajectory[i:j_start + 1])
+                curr_min_y = min(p["y"] for p in trajectory[i:j_start + 1])
+                curr_max_y = max(p["y"] for p in trajectory[i:j_start + 1])
+
+                if (curr_max_x - curr_min_x) <= 16.0 and (curr_max_y - curr_min_y) <= 16.0:
+                    pts = trajectory[i:j_start + 1]
+                    cx = sum(p["x"] for p in pts) / len(pts)
+                    cy = sum(p["y"] for p in pts) / len(pts)
+                    rad = max(math.hypot(p["x"] - cx, p["y"] - cy) for p in pts)
+                    if rad < 8.0:
+                        best_j = j_start
+                        for ext_j in range(j_start + 1, min(n_pts, j_start + 400)):
+                            ext_pt = trajectory[ext_j]
+                            if math.hypot(ext_pt["x"] - cx, ext_pt["y"] - cy) < 8.0:
+                                best_j = ext_j
+                            else:
+                                break
+                        dur = trajectory[best_j]["timestamp_sec"] - trajectory[i]["timestamp_sec"]
+                        pts = trajectory[i:best_j + 1]
+                        cx = sum(p["x"] for p in pts) / len(pts)
+                        cy = sum(p["y"] for p in pts) / len(pts)
+                        rad = max(math.hypot(p["x"] - cx, p["y"] - cy) for p in pts)
+                        dwell_found = {
+                            "start_idx": i,
+                            "end_idx": best_j,
+                            "start_time": trajectory[i]["timestamp_sec"],
+                            "end_time": trajectory[best_j]["timestamp_sec"],
+                            "duration": round(dur, 1),
+                            "radius": round(rad, 1),
+                        }
+                        break
 
         if dwell_found and not is_crouched:
             actions.append({

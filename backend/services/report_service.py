@@ -168,11 +168,13 @@ class LLMReportGeneratorService(ReportGeneratorService):
 
         inc_type = incident.get("type", "Suspicious Activity")
         conf = incident.get("confidence", 87.4)
-        sev = incident.get("severity", "HIGH")
+        is_hypothesis = bool(incident.get("is_hypothesis") or (inc_type == "Theft / Tampering" and not incident.get("theft_visually_verified")))
+        sev = "HIGH" if (is_hypothesis and inc_type == "Theft / Tampering") else incident.get("severity", "HIGH")
         risk_score = incident.get("incident_risk_score", conf)
 
         persons = [e for e in entities if e.get("type") == "person"]
         vehicles = [e for e in entities if e.get("type") in ["vehicle", "car", "truck"]]
+        objects = [e for e in entities if e.get("type") in ["object", "phone"]]
 
         primary_subject = persons[0]["label"] if persons else (entities[0]["label"] if entities else "Unknown Subject")
         primary_vehicle = vehicles[0]["label"] if vehicles else None
@@ -182,17 +184,34 @@ class LLMReportGeneratorService(ReportGeneratorService):
 
         # Executive Summary
         interaction_text = f" interacting with {primary_vehicle}" if primary_vehicle else ""
-        exec_summary = (
-            f"Automated CCTV forensic analysis for {case_number} at {location}. "
-            f"The CaseIntel multi-modal intelligence pipeline classified this event as '{inc_type}' "
-            f"with {conf}% model confidence ({sev} severity, risk score {risk_score}/100). "
-            f"The incident involved tracked subject {primary_subject}{interaction_text} "
-            f"captured across camera feed {', '.join(camera_ids)}. Immediate review and verification is recommended."
-        )
+        if is_hypothesis:
+            exec_summary = (
+                f"Automated CCTV forensic analysis for {case_number} at {location}. "
+                f"The CaseIntel multi-modal intelligence pipeline flagged this incident scenario as an automated "
+                f"MODEL HYPOTHESIS: '{inc_type}' with {conf}% model confidence ({sev} severity, risk score {risk_score}/100). "
+                f"Crucial visual limitation: while approach, physical altercation, and phone manipulation were verified, "
+                f"object disappearance was not visually established in the footage. "
+                f"The scenario involved tracked subject {primary_subject}{interaction_text} "
+                f"captured across camera feed {', '.join(camera_ids)}. Independent investigator verification is strictly required."
+            )
+        else:
+            exec_summary = (
+                f"Automated CCTV forensic analysis for {case_number} at {location}. "
+                f"The CaseIntel multi-modal intelligence pipeline classified this event as '{inc_type}' "
+                f"with {conf}% model confidence ({sev} severity, risk score {risk_score}/100). "
+                f"The incident involved tracked subject {primary_subject}{interaction_text} "
+                f"captured across camera feed {', '.join(camera_ids)}. Immediate review and verification is recommended."
+            )
 
         # Section 1: Classification & Rationale
         factors = []
-        if primary_vehicle:
+        if is_hypothesis:
+            factors.append("• Forensic Rule Status: UNVERIFIED HYPOTHESIS (Step 4 Object Disappearance was not established in footage).")
+            factors.append("• Verified Observation: Approach and physical interaction / altercation observed between subjects.")
+            if objects:
+                factors.append(f"• Verified Observation: Interaction with registered object ({', '.join([o.get('label', 'Phone-01') for o in objects])}).")
+            factors.append("• Visual Limitation: Insufficient visual evidence to confirm theft; no removal or disappearance event was recorded.")
+        elif primary_vehicle:
             factors.append(f"1. Spatio-temporal dwell time in close proximity to {primary_vehicle}.")
         elif events:
             factors.append(f"1. Behavioral event pattern detected: {', '.join([e.get('action') or e.get('event_type', '') for e in events[:3]])}.")
@@ -200,15 +219,17 @@ class LLMReportGeneratorService(ReportGeneratorService):
             factors.append("1. Perimeter observation and movement anomaly.")
 
         first_ts = events[0].get("timestamp", "00:00") if events else "00:00"
-        factors.append(f"2. Zone entry and activity observed at {first_ts} on camera {', '.join(camera_ids)}.")
-        factors.append("3. Directional velocity displacement and subsequent perimeter transition.")
+        if not is_hypothesis:
+            factors.append(f"2. Zone entry and activity observed at {first_ts} on camera {', '.join(camera_ids)}.")
+            factors.append("3. Directional velocity displacement and subsequent perimeter transition.")
 
         sec1_content = (
-            f"• Incident Classification: {inc_type}\n"
+            f"• Incident Classification: {inc_type}" + (" [MODEL HYPOTHESIS]" if is_hypothesis else "") + "\n"
             f"• Model Confidence: {conf}%\n"
             f"• Risk Severity: {sev} (Calculated Risk Index: {risk_score})\n"
-            f"• Classification Engine: XGBoost 1.8 + TreeSHAP Attribution\n\n"
-            "Key Contributing Factors:\n" + "\n".join(factors)
+            f"• Classification Engine: XGBoost 1.8 + TreeSHAP Attribution\n"
+            f"• Verification Status: {'Model hypothesis — investigator verification required' if is_hypothesis else 'Verified forensic pattern'}\n\n"
+            "Key Assessment Factors & Video Evidence Grounding:\n" + "\n".join(factors)
         )
 
         # Section 2: Chronological Timeline
@@ -227,7 +248,7 @@ class LLMReportGeneratorService(ReportGeneratorService):
 
         # Section 3: Key Evidence Analysis
         evidence_lines = [
-            f"Total Entities Tracked: {len(entities)} ({len(persons)} person(s), {len(vehicles)} vehicle(s))",
+            f"Total Entities Tracked: {len(entities)} ({len(persons)} person(s), {len(vehicles)} vehicle(s), {len(objects)} object(s))",
             f"CCTV Video Feeds: {len(camera_ids)} camera(s) analyzed ({', '.join(camera_ids)})",
             f"Forensic Integrity: SHA-256 cryptographic hashing applied to all captured frames and video segments.",
         ]
@@ -282,10 +303,12 @@ class LLMReportGeneratorService(ReportGeneratorService):
                 },
             ],
             "disclaimer": (
-                "This report was synthesized from verified structured forensic video observations "
+                "IMPORTANT FORENSIC & LEGAL DISCLAIMER: This report was synthesized from verified structured forensic video observations "
                 "(YOLOv11 object detections, ByteTrack multi-object tracking, spatio-temporal interaction analysis, "
-                "EasyOCR timestamp verification, and TreeSHAP explainability). No external LLM API key was configured; "
-                "generated deterministically without generative hallucination."
+                "EasyOCR timestamp verification, and TreeSHAP explainability). Machine learning classifications (including theft/tampering hypotheses) "
+                "represent automated investigative leads and do not constitute conclusive forensic or legal proof. "
+                "Where visual removal/disappearance of objects is not conclusively established in the video stream, findings must be treated "
+                "as unverified model hypotheses. All classifications and findings must be independently verified by an authorized forensic investigator."
             ),
         }
 

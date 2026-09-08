@@ -45,6 +45,21 @@ export interface IncidentClassificationResponse {
   positiveContributors?: FeatureContribution[];
   negativeContributors?: FeatureContribution[];
   shapExplanation?: ShapExplanationResponse;
+  status?: string;
+  has_analysis?: boolean;
+  hasAnalysis?: boolean;
+  is_hypothesis?: boolean;
+  isHypothesis?: boolean;
+  theft_visually_verified?: boolean;
+  theftVisuallyVerified?: boolean;
+  hypothesis_status?: string;
+  hypothesisStatus?: string;
+  visual_evidence_summary?: string;
+  visualEvidenceSummary?: string;
+  forensic_rule_evaluation?: Array<{ step: number; name: string; status: string; detail: string }>;
+  forensicRuleEvaluation?: Array<{ step: number; name: string; status: string; detail: string }>;
+  verified_observations?: Array<{ action: string; confidence: number; severity: string; description: string; timestamp: string; entity_id: string }>;
+  verifiedObservations?: Array<{ action: string; confidence: number; severity: string; description: string; timestamp: string; entity_id: string }>;
 }
 
 function mapShapContribution(item: any): FeatureContribution {
@@ -71,6 +86,13 @@ export async function getIncidentAnalysis(
   const positiveContributors = (json.positiveContributors ?? json.positive_contributors ?? []).map(mapShapContribution);
   const negativeContributors = (json.negativeContributors ?? json.negative_contributors ?? []).map(mapShapContribution);
 
+  const isHypo = Boolean(json.is_hypothesis ?? json.isHypothesis);
+  const theftVerif = Boolean(json.theft_visually_verified ?? json.theftVisuallyVerified);
+  const hypoStatus = json.hypothesis_status ?? json.hypothesisStatus;
+  const visSummary = json.visual_evidence_summary ?? json.visualEvidenceSummary;
+  const forensicRules = json.forensic_rule_evaluation ?? json.forensicRuleEvaluation ?? [];
+  const verifiedObs = json.verified_observations ?? json.verifiedObservations ?? [];
+
   return {
     type: json.type,
     severity: json.severity as Severity,
@@ -87,6 +109,21 @@ export async function getIncidentAnalysis(
     positiveContributors,
     negativeContributors,
     shapExplanation: json.shapExplanation ?? json.shap_explanation,
+    status: json.status,
+    has_analysis: json.has_analysis,
+    hasAnalysis: json.hasAnalysis,
+    is_hypothesis: isHypo,
+    isHypothesis: isHypo,
+    theft_visually_verified: theftVerif,
+    theftVisuallyVerified: theftVerif,
+    hypothesis_status: hypoStatus,
+    hypothesisStatus: hypoStatus,
+    visual_evidence_summary: visSummary,
+    visualEvidenceSummary: visSummary,
+    forensic_rule_evaluation: forensicRules,
+    forensicRuleEvaluation: forensicRules,
+    verified_observations: verifiedObs,
+    verifiedObservations: verifiedObs,
   };
 }
 
