@@ -232,11 +232,27 @@ class YOLOv11DetectorService:
         if progress_callback and total_frames > 0:
             progress_callback(100.0, total_frames, total_frames)
 
-        # Aggregate tracks summary
+        # Aggregate tracks summary with transient noise rejection
         tracks_list = []
         for tid, tinfo in tracks_map.items():
-            avg_conf = round(sum(tinfo["confidences"]) / len(tinfo["confidences"]), 3)
             raw_traj = tinfo["trajectory"]
+            obs = len(raw_traj)
+            dur = round(tinfo["last_seen_sec"] - tinfo["first_seen_sec"], 2)
+            avg_conf = round(sum(tinfo["confidences"]) / len(tinfo["confidences"]), 3)
+            cls_name = str(tinfo["class"]).lower()
+
+            # Reject ultra-short person noise (< 3 observations and duration < 0.3s, or single frame with low conf)
+            if cls_name == "person" and ((obs < 3 and dur < 0.3) or (obs <= 2 and avg_conf < 0.50)):
+                continue
+
+            # Reject transient baggage/objects (< 5 observations or duration < 1.0s with low conf)
+            if cls_name in ["backpack", "handbag", "suitcase", "cell phone", "laptop"] and (obs < 5 or dur < 1.0) and avg_conf < 0.70:
+                continue
+
+            # Reject transient vehicle glitches
+            if cls_name in ["car", "truck", "bus", "motorcycle", "bicycle"] and obs < 3 and dur < 0.3 and avg_conf < 0.50:
+                continue
+
             # Downsample trajectory points to ~2 Hz (every 0.5s) for long videos (> 200 points)
             # This maintains fluid video player bounding-box interpolation while keeping memory and DB bounded
             if len(raw_traj) > 200:
@@ -294,8 +310,9 @@ class YOLOv11DetectorService:
     ) -> List[Dict[str, Any]]:
         """
         Merge fragmented person tracklets caused by temporary occlusions (e.g. crouching
-        behind furniture), posture changes, or transient detector misclassification.
-        Preserves single physical human identity across surveillance scenes.
+        behind furniture or under vehicle hoods), posture changes, or transient detector misclassification.
+        Preserves single physical human identity across surveillance scenes while keeping distinct concurrent
+        individuals strictly separated.
         """
         person_candidates = []
         other_tracks = []
@@ -311,7 +328,7 @@ class YOLOv11DetectorService:
             return tracks
 
         # Sort candidate person tracks chronologically by first appearance
-        person_candidates.sort(key=lambda x: x.get("first_seen_sec", 0.0))
+        person_candidates.sort(key=lambda x: (x.get("first_seen_sec", 0.0), -(x.get("last_seen_sec", 0.0) - x.get("first_seen_sec", 0.0))))
 
         merged_persons: List[Dict[str, Any]] = []
         for cand in person_candidates:
@@ -319,47 +336,105 @@ class YOLOv11DetectorService:
                 merged_persons.append(cand)
                 continue
 
-            # Find if this candidate can legitimately be stitched to an existing person track
-            # Conditions for legitimate stitching:
-            # 1. Non-overlapping in time: candidate starts strictly after existing track ended.
-            # 2. Time gap is short (0.0 <= gap <= 4.0s).
-            # 3. Spatial displacement is physically plausible for a human during that gap.
-            matched_idx = None
             cand_first = cand.get("first_seen_sec", 0.0)
+            cand_last = cand.get("last_seen_sec", 0.0)
             cand_traj = cand.get("trajectory", [])
-            first_pt = cand_traj[0] if cand_traj else {"x": 0.0, "y": 0.0}
-            fx = first_pt.get("center_x", first_pt.get("x", 0.0))
-            fy = first_pt.get("center_y", first_pt.get("y", 0.0))
+            c_start = cand_traj[0] if cand_traj else {"x": 0.0, "y": 0.0}
+            c_end = cand_traj[-1] if cand_traj else {"x": 0.0, "y": 0.0}
+            cx_start = c_start.get("center_x", c_start.get("x", 0.0))
+            cy_start = c_start.get("center_y", c_start.get("y", 0.0))
+
+            matched_idx = None
+            best_score = 999.0
 
             for idx, existing in enumerate(merged_persons):
-                exist_first = existing.get("first_seen_sec", 0.0)
-                exist_last = existing.get("last_seen_sec", 0.0)
+                e_first = existing.get("first_seen_sec", 0.0)
+                e_last = existing.get("last_seen_sec", 0.0)
+                e_traj = existing.get("trajectory", [])
+                e_start = e_traj[0] if e_traj else {"x": 0.0, "y": 0.0}
+                e_end = e_traj[-1] if e_traj else {"x": 0.0, "y": 0.0}
+                ex_end = e_end.get("center_x", e_end.get("x", 0.0))
+                ey_end = e_end.get("center_y", e_end.get("y", 0.0))
 
-                # Check if there is temporal overlap between existing and candidate
-                has_overlap = not (exist_last < cand_first or cand.get("last_seen_sec", 0.0) < exist_first)
-                if has_overlap:
-                    # They exist concurrently in the scene — they CANNOT be the same person!
-                    continue
+                # Check common timestamps
+                e_pts_by_t = {round(p.get("timestamp_sec", 0.0), 1): p for p in e_traj}
+                c_pts_by_t = {round(p.get("timestamp_sec", 0.0), 1): p for p in cand_traj}
+                common_ts = set(e_pts_by_t.keys()) & set(c_pts_by_t.keys())
 
-                time_gap = cand_first - exist_last
-                if 0.0 <= time_gap <= 4.0:
-                    exist_traj = existing.get("trajectory", [])
-                    last_pt = exist_traj[-1] if exist_traj else {"x": 0.0, "y": 0.0}
-                    lx = last_pt.get("center_x", last_pt.get("x", 0.0))
-                    ly = last_pt.get("center_y", last_pt.get("y", 0.0))
-                    dist = math.hypot(fx - lx, fy - ly)
+                # If there are simultaneous overlapping frames
+                if common_ts:
+                    dists = [
+                        math.hypot(
+                            e_pts_by_t[t].get("center_x", e_pts_by_t[t].get("x", 0.0)) - c_pts_by_t[t].get("center_x", c_pts_by_t[t].get("x", 0.0)),
+                            e_pts_by_t[t].get("center_y", e_pts_by_t[t].get("y", 0.0)) - c_pts_by_t[t].get("center_y", c_pts_by_t[t].get("y", 0.0))
+                        )
+                        for t in common_ts
+                    ]
+                    avg_common_dist = sum(dists) / len(dists)
 
-                    max_plausible_dist = max(35.0, 20.0 * max(0.0, time_gap) + 15.0)
-                    if dist <= max_plausible_dist:
-                        matched_idx = idx
-                        break
+                    # Case A: Duplicate detection / handoff on same body:
+                    # Common frames are brief (<= 3 frames) or spatial distance is coincident (< 6.0%)
+                    if (len(common_ts) <= 3 and avg_common_dist < 10.0) or avg_common_dist < 6.0:
+                        if avg_common_dist < best_score:
+                            best_score = avg_common_dist
+                            matched_idx = idx
+                            continue
+                    else:
+                        # Persistent simultaneous presence in distinct locations: distinct concurrent persons!
+                        continue
+
+                # Check if candidate falls inside an internal gap of existing track
+                if e_first <= cand_first and cand_last <= e_last:
+                    closest_dist = min(
+                        math.hypot(
+                            p.get("center_x", p.get("x", 0.0)) - cx_start,
+                            p.get("center_y", p.get("y", 0.0)) - cy_start
+                        )
+                        for p in e_traj
+                    )
+                    if closest_dist < 10.0:
+                        if closest_dist < best_score:
+                            best_score = closest_dist
+                            matched_idx = idx
+                            continue
+
+                # Non-overlapping: calculate time gap
+                overlap_start = max(e_first, cand_first)
+                overlap_end = min(e_last, cand_last)
+                overlap_dur = max(0.0, overlap_end - overlap_start)
+
+                if overlap_dur == 0:
+                    time_gap = cand_first - e_last
+                    if 0.0 <= time_gap <= 35.0:
+                        dist = math.hypot(cx_start - ex_end, cy_start - ey_end)
+
+                        # Check if existing person departed at boundary
+                        ex_last_pt = e_end.get("x", 50.0)
+                        ey_last_pt = e_end.get("y", 50.0)
+                        has_departed = (ex_last_pt > 88.0 or ex_last_pt < 10.0 or ey_last_pt > 88.0 or ey_last_pt < 10.0)
+
+                        # Condition 1: Short gap (<= 5s), plausible human walking displacement
+                        if time_gap <= 5.0 and dist <= max(35.0, 20.0 * time_gap + 15.0):
+                            if dist < best_score:
+                                best_score = dist
+                                matched_idx = idx
+
+                        # Condition 2: Prolonged occlusion inside monitored zone without boundary departure
+                        # (e.g. crouching beside/under vehicle, ducking behind wall/furniture)
+                        elif not has_departed and time_gap <= 35.0:
+                            if dist <= 42.0:
+                                if dist < best_score:
+                                    best_score = dist
+                                    matched_idx = idx
 
             if matched_idx is not None:
                 target = merged_persons[matched_idx]
-                target["trajectory"].extend(cand.get("trajectory", []))
+                existing_ts = {round(p.get("timestamp_sec", 0.0), 2) for p in target["trajectory"]}
+                new_pts = [p for p in cand_traj if round(p.get("timestamp_sec", 0.0), 2) not in existing_ts]
+                target["trajectory"].extend(new_pts)
                 target["trajectory"].sort(key=lambda p: p.get("timestamp_sec", 0.0))
                 target["first_seen_sec"] = min(target.get("first_seen_sec", 0.0), cand_first)
-                target["last_seen_sec"] = max(target.get("last_seen_sec", 0.0), cand.get("last_seen_sec", 0.0))
+                target["last_seen_sec"] = max(target.get("last_seen_sec", 0.0), cand_last)
                 target["observations_count"] = len(target["trajectory"])
                 conf_a = target.get("avg_confidence", 0.8)
                 conf_b = cand.get("avg_confidence", 0.8)

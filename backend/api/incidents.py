@@ -200,6 +200,10 @@ def get_incident(investigation_id: str, db: Session = Depends(get_db)):
     classification["negative_contributors"] = shap_res["negative_contributors"]
     classification["reasoning"] = shap_res["narrative"]
 
+    # Include spatiotemporal video activity recognition if available
+    if inv.incident_data and isinstance(inv.incident_data, dict) and "video_activity_recognition" in inv.incident_data:
+        classification["video_activity_recognition"] = inv.incident_data["video_activity_recognition"]
+
     return classification
 
 

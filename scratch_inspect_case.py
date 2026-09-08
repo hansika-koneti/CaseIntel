@@ -2,8 +2,12 @@ import sqlite3, json
 
 conn = sqlite3.connect('backend/caseintel.db')
 c = conn.cursor()
-inv = c.execute("SELECT id, case_number, location, video_count, incident_data FROM investigations WHERE case_number LIKE '%22725B%'").fetchone()
-print("INV:", inv)
+inv = c.execute("SELECT id, case_number, location, video_count, incident_data FROM investigations WHERE case_number = 'CASE-EVAL-UCF-8202'").fetchone()
+print("INV:", inv[:4])
+if inv and inv[4]:
+    idata = json.loads(inv[4])
+    print("KEYS:", list(idata.keys()))
+    print("TYPE:", idata.get("type"), "PREDICTION:", idata.get("prediction"), "RISK:", idata.get("risk_score"))
 if inv:
     ents = c.execute("SELECT id, type, label, confidence, first_seen, last_seen, metadata_json FROM entities WHERE investigation_id = ?", (inv[0],)).fetchall()
     print("ENTS:")
@@ -24,3 +28,8 @@ if inv:
     print("VIDEOS:")
     for v in vids:
         print(v)
+
+    reps = c.execute("SELECT id, created_at, report_data FROM reports WHERE investigation_id = ?", (inv[0],)).fetchall()
+    print("REPORTS:")
+    for r in reps:
+        print(r[0], r[1], (r[2][:300] if r[2] else 'None'))

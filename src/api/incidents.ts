@@ -29,6 +29,28 @@ export interface ShapExplanationResponse {
   narrative: string;
 }
 
+export interface SupportingSegment {
+  start: string;
+  end: string;
+  start_sec?: number;
+  end_sec?: number;
+  peak_confidence?: number;
+  clip_count?: number;
+}
+
+export interface VideoActivityRecognition {
+  primary_activity: string;
+  confidence: number;
+  severity: Severity;
+  model_name: string;
+  model_version: string;
+  status: string;
+  supporting_segments: SupportingSegment[];
+  top_alternatives: Array<{ activity: string; confidence: number }>;
+  total_clips_analyzed?: number;
+  video_duration_sec?: number;
+}
+
 export interface IncidentClassificationResponse {
   type: string;
   severity: Severity;
@@ -60,6 +82,8 @@ export interface IncidentClassificationResponse {
   forensicRuleEvaluation?: Array<{ step: number; name: string; status: string; detail: string }>;
   verified_observations?: Array<{ action: string; confidence: number; severity: string; description: string; timestamp: string; entity_id: string }>;
   verifiedObservations?: Array<{ action: string; confidence: number; severity: string; description: string; timestamp: string; entity_id: string }>;
+  video_activity_recognition?: VideoActivityRecognition;
+  videoActivityRecognition?: VideoActivityRecognition;
 }
 
 function mapShapContribution(item: any): FeatureContribution {
@@ -124,6 +148,8 @@ export async function getIncidentAnalysis(
     forensicRuleEvaluation: forensicRules,
     verified_observations: verifiedObs,
     verifiedObservations: verifiedObs,
+    video_activity_recognition: json.video_activity_recognition ?? json.videoActivityRecognition,
+    videoActivityRecognition: json.video_activity_recognition ?? json.videoActivityRecognition,
   };
 }
 

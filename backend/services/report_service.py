@@ -182,15 +182,24 @@ class LLMReportGeneratorService(ReportGeneratorService):
         now_str = datetime.now(timezone.utc).isoformat()
         rep_id = f"REP-{uuid4().hex[:6]}"
 
+        # Extract Direct Video Activity Recognition if available
+        video_act = incident.get("video_activity_recognition") or {}
+        video_act_type = video_act.get("primary_activity")
+        video_act_conf = video_act.get("confidence")
+        video_act_segs = video_act.get("supporting_segments", [])
+        video_act_seg_str = f"{video_act_segs[0].get('start', '00:00')}–{video_act_segs[0].get('end', '00:00')}" if video_act_segs else None
+
         # Executive Summary
         interaction_text = f" interacting with {primary_vehicle}" if primary_vehicle else ""
+        video_act_summary = f" Concurrently, the Direct Temporal Video Activity Model (R(2+1)D-18) detected visual activity '{video_act_type}' ({video_act_conf}% confidence) during temporal window {video_act_seg_str}." if video_act_type else ""
+
         if is_hypothesis:
             exec_summary = (
                 f"Automated CCTV forensic analysis for {case_number} at {location}. "
                 f"The CaseIntel multi-modal intelligence pipeline flagged this incident scenario as an automated "
                 f"MODEL HYPOTHESIS: '{inc_type}' with {conf}% model confidence ({sev} severity, risk score {risk_score}/100). "
                 f"Crucial visual limitation: while approach, physical altercation, and phone manipulation were verified, "
-                f"object disappearance was not visually established in the footage. "
+                f"object disappearance was not visually established in the footage.{video_act_summary} "
                 f"The scenario involved tracked subject {primary_subject}{interaction_text} "
                 f"captured across camera feed {', '.join(camera_ids)}. Independent investigator verification is strictly required."
             )
@@ -198,13 +207,16 @@ class LLMReportGeneratorService(ReportGeneratorService):
             exec_summary = (
                 f"Automated CCTV forensic analysis for {case_number} at {location}. "
                 f"The CaseIntel multi-modal intelligence pipeline classified this event as '{inc_type}' "
-                f"with {conf}% model confidence ({sev} severity, risk score {risk_score}/100). "
+                f"with {conf}% model confidence ({sev} severity, risk score {risk_score}/100).{video_act_summary} "
                 f"The incident involved tracked subject {primary_subject}{interaction_text} "
                 f"captured across camera feed {', '.join(camera_ids)}. Immediate review and verification is recommended."
             )
 
         # Section 1: Classification & Rationale
         factors = []
+        if video_act_type:
+            factors.append(f"• Direct Video Activity Model (R(2+1)D-18): '{video_act_type}' ({video_act_conf}% confidence) across segment {video_act_seg_str}.")
+            factors.append(f"• Forensic Tabular Classifier (XGBoost): '{inc_type}' ({conf}% confidence, severity {sev}).")
         if is_hypothesis:
             factors.append("• Forensic Rule Status: UNVERIFIED HYPOTHESIS (Step 4 Object Disappearance was not established in footage).")
             factors.append("• Verified Observation: Approach and physical interaction / altercation observed between subjects.")
@@ -223,14 +235,24 @@ class LLMReportGeneratorService(ReportGeneratorService):
             factors.append(f"2. Zone entry and activity observed at {first_ts} on camera {', '.join(camera_ids)}.")
             factors.append("3. Directional velocity displacement and subsequent perimeter transition.")
 
-        sec1_content = (
-            f"• Incident Classification: {inc_type}" + (" [MODEL HYPOTHESIS]" if is_hypothesis else "") + "\n"
-            f"• Model Confidence: {conf}%\n"
-            f"• Risk Severity: {sev} (Calculated Risk Index: {risk_score})\n"
-            f"• Classification Engine: XGBoost 1.8 + TreeSHAP Attribution\n"
-            f"• Verification Status: {'Model hypothesis — investigator verification required' if is_hypothesis else 'Verified forensic pattern'}\n\n"
-            "Key Assessment Factors & Video Evidence Grounding:\n" + "\n".join(factors)
-        )
+        sec1_lines = [
+            f"• Forensic Incident Classification: {inc_type}" + (" [MODEL HYPOTHESIS]" if is_hypothesis else ""),
+            f"• Model Confidence: {conf}%",
+            f"• Risk Severity: {sev} (Calculated Risk Index: {risk_score})",
+            f"• Classification Engine: XGBoost 1.8 + TreeSHAP Attribution",
+        ]
+        if video_act_type:
+            sec1_lines.extend([
+                f"• Direct Video Recognition (Pixels): {video_act_type} ({video_act_conf}% confidence, {video_act_seg_str})",
+                f"• Video Temporal Engine: R(2+1)D-18 (Kinetics-400 + Trained Surveillance Head)",
+            ])
+        sec1_lines.extend([
+            f"• Verification Status: {'Model hypothesis — investigator verification required' if is_hypothesis else 'Verified forensic pattern'}",
+            "",
+            "Key Assessment Factors & Video Evidence Grounding:",
+            "\n".join(factors)
+        ])
+        sec1_content = "\n".join(sec1_lines)
 
         # Section 2: Chronological Timeline
         timeline_lines = []

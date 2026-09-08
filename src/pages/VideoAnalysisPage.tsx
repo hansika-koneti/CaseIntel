@@ -121,7 +121,17 @@ export default function VideoAnalysisPage() {
             const first = data.entities.find(e => ['person', 'vehicle'].includes(e.type)) || data.entities[0];
             if (first) setSelectedEntity(first.id);
           }
-          if (data.events.length > 0) {
+          const urlT = searchParams.get('t');
+          if (urlT) {
+            const sec = parseTimestampToSeconds(urlT);
+            setCurrentTimeSec(sec);
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            setCurrentTimeFormatted(`${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`);
+            if (videoRef.current) {
+              videoRef.current.currentTime = sec;
+            }
+          } else if (data.events.length > 0) {
             setCurrentTimeFormatted(data.events[0].timestamp);
             setCurrentTimeSec(parseTimestampToSeconds(data.events[0].timestamp));
           }
@@ -580,6 +590,12 @@ export default function VideoAnalysisPage() {
                     const dur = (e.target as HTMLVideoElement).duration;
                     if (!isNaN(dur)) setDurationSec(dur);
                     calcVideoBox();
+                    const urlT = searchParams.get('t');
+                    if (urlT) {
+                      const sec = parseTimestampToSeconds(urlT);
+                      (e.target as HTMLVideoElement).currentTime = sec;
+                      setCurrentTimeSec(sec);
+                    }
                   }}
                   onTimeUpdate={(e) => {
                     const t = (e.target as HTMLVideoElement).currentTime;

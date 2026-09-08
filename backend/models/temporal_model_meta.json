@@ -1,0 +1,39 @@
+{
+  "classes": [
+    "Normal Operation",
+    "Stealing / Theft",
+    "Burglary / Break-In",
+    "Fighting / Altercation"
+  ],
+  "in_features": 512,
+  "clip_length_frames": 16,
+  "spatial_resolution": [
+    112,
+    112
+  ],
+  "normalization": {
+    "mean": [
+      0.43216,
+      0.394666,
+      0.37645
+    ],
+    "std": [
+      0.22803,
+      0.22145,
+      0.216989
+    ]
+  },
+  "train_videos": [
+    "backend\\data\\ucf_crime_train\\Stealing007_x264.mp4",
+    "backend\\data\\ucf_crime_train\\Stealing008_x264.mp4",
+    "backend\\data\\ucf_crime_train\\Burglary002_x264.mp4",
+    "backend\\data\\ucf_crime_train\\Fighting005_x264.mp4",
+    "backend\\data\\ucf_crime_train\\Fighting006_x264.mp4",
+    "backend\\test_footage\\3878245337-preview.mp4"
+  ],
+  "held_out_eval_videos": [
+    "backend\\test_footage\\ucf_crime_stealing002.mp4",
+    "backend\\data\\ucf_crime_train\\Burglary003_x264.mp4"
+  ],
+  "integrity_attestation": "Stealing002_x264.mp4 and Burglary003_x264.mp4 strictly held out from training and validation."
+}

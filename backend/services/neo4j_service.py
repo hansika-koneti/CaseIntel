@@ -821,6 +821,69 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                         if p_ent in details:
                             details[p_ent]["relationships"].append(f"{rel_type} → {s_ent}")
 
+        # 7B. Direct Video Activity Recognition Nodes (Separate reasoning path)
+        video_activity = (investigation_data or {}).get("video_activity_recognition") or {}
+        if video_activity and video_id:
+            act_label = video_activity.get("primary_activity", "Unknown Activity")
+            act_conf = float(video_activity.get("confidence", 0.0))
+            act_model = video_activity.get("model_name", "R(2+1)D-18")
+            act_version = video_activity.get("model_version", "1.0.0")
+            segs = video_activity.get("supporting_segments", [])
+            clip_start = segs[0].get("start", "00:00") if segs else "00:00"
+            clip_end = segs[0].get("end", "00:00") if segs else "00:00"
+
+            ap_id = f"APRED-{abs(hash(video_id + act_label)) % 10000:04d}"
+            nodes.append({
+                "id": ap_id,
+                "label": f"Prediction: {act_label}",
+                "type": "activity_prediction",
+                "category": "prediction",
+                "is_technical": False,
+                "confidence": act_conf,
+                "is_suspicious": "Theft" in act_label or "Break-In" in act_label or "Fighting" in act_label,
+                "x": 870,
+                "y": 140,
+                "data": {
+                    "raw_id": ap_id,
+                    "id": ap_id,
+                    "label": f"Prediction: {act_label}",
+                    "type": "activity_prediction",
+                    "activity_type": act_label,
+                    "confidence": act_conf,
+                    "model_name": act_model,
+                    "model_version": act_version,
+                    "clip_start": clip_start,
+                    "clip_end": clip_end,
+                    "investigation_id": investigation_id,
+                    "video_id": video_id,
+                }
+            })
+            details[ap_id] = {
+                "id": ap_id,
+                "label": f"Prediction: {act_label}",
+                "type": "activity_prediction",
+                "confidence": act_conf,
+                "model_name": act_model,
+                "model_version": act_version,
+                "clip_start": clip_start,
+                "clip_end": clip_end,
+                "relationships": [f"HAS_ACTIVITY_PREDICTION ← {video_id}"],
+            }
+
+            # Edge: Video -> ActivityPrediction (HAS_ACTIVITY_PREDICTION)
+            edges.append({
+                "id": f"e_vid_ap_{video_id}_{ap_id}",
+                "source": video_id,
+                "target": ap_id,
+                "relationship": "HAS_ACTIVITY_PREDICTION",
+                "label": "HAS ACTIVITY PREDICTION",
+                "suspicious": False,
+                "category": "prediction",
+                "is_technical": False,
+            })
+            if video_id in details:
+                details[video_id]["relationships"].append(f"HAS_ACTIVITY_PREDICTION → {ap_id}")
+
         # 8. Persist to live Neo4j instance when connected
         if self.is_connected and self.driver:
             try:
@@ -1021,12 +1084,38 @@ class Neo4jKnowledgeGraphService(KnowledgeGraphService):
                         label=nlabel,
                         vid_id=video_id,
                     )
+                elif ntype == "activity_prediction":
+                    session.run(
+                        """
+                        MERGE (ap:ActivityPrediction {id: $id, investigation_id: $inv_id})
+                        SET ap.label = $label,
+                            ap.confidence = $conf,
+                            ap.model_name = $model_name,
+                            ap.model_version = $model_version,
+                            ap.clip_start = $clip_start,
+                            ap.clip_end = $clip_end,
+                            ap.video_id = $vid_id
+                        WITH ap
+                        MATCH (vid:Video {id: $vid_id, investigation_id: $inv_id})
+                        MERGE (vid)-[:HAS_ACTIVITY_PREDICTION]->(ap)
+                        """,
+                        id=nid,
+                        inv_id=investigation_id,
+                        label=nlabel,
+                        conf=conf,
+                        model_name=data.get("model_name", "R(2+1)D-18"),
+                        model_version=data.get("model_version", "1.0.0"),
+                        clip_start=data.get("clip_start", "00:00"),
+                        clip_end=data.get("clip_end", "00:00"),
+                        vid_id=video_id,
+                    )
 
             # 4. Merge Relationships (Scoped by investigation_id and active video_id)
             valid_rels = {
                 "CONTAINS_VIDEO", "CAPTURED_BY", "LOCATED_AT", "DETECTED_BY", "DETECTED_AT",
                 "PERFORMED", "OCCURRED_AT", "INVOLVED", "PARTICIPATED_IN", "INVOLVES_OBJECT",
-                "THEN", "CONFRONTED", "MANIPULATED", "INTERACTED_WITH", "PRODUCED_EVIDENCE"
+                "THEN", "CONFRONTED", "MANIPULATED", "INTERACTED_WITH", "PRODUCED_EVIDENCE",
+                "HAS_ACTIVITY_PREDICTION", "SUPPORTED_BY"
             }
 
             for e in edges:
