@@ -16,49 +16,19 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.db import VideoModel, EntityModel, EventModel, EvidenceModel, InvestigationModel
-from services.yolo_service import YOLOv11DetectorService
-from services.action_recognition_service import ActionRecognitionService
-from services.incident_service import XGBoostIncidentClassifierService
-from services.shap_service import SHAPExplainabilityService
-from services.ocr_service import EasyOCRService
-from services.temporal_video_service import TemporalVideoActivityService
+from services.pipeline_orchestrator import (
+    pipeline,
+    format_timestamp,
+    parse_timestamp_to_sec,
+    ELIGIBLE_SUBJECT_CLASSES,
+)
 
 router = APIRouter()
-yolo_detector = YOLOv11DetectorService()
-action_service = ActionRecognitionService()
-incident_classifier = XGBoostIncidentClassifierService()
-shap_service = SHAPExplainabilityService(incident_classifier)
-ocr_service = EasyOCRService()
-temporal_video_service = TemporalVideoActivityService()
+# ML services are lazy-loaded by the PipelineOrchestrator on first use,
+# so importing this router no longer loads YOLO/OCR/R(2+1)D/XGBoost weights.
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-
-def format_timestamp(sec: float, force_hours: bool = False) -> str:
-    """Format seconds into MM:SS or HH:MM:SS for long footage."""
-    s = max(0, int(round(sec)))
-    h = s // 3600
-    m = (s % 3600) // 60
-    sec_rem = s % 60
-    if h > 0 or force_hours:
-        return f"{h:02d}:{m:02d}:{sec_rem:02d}"
-    return f"{m:02d}:{sec_rem:02d}"
-
-
-def parse_timestamp_to_sec(ts: str) -> float:
-    """Parse MM:SS or HH:MM:SS timestamp string to total seconds."""
-    if not ts:
-        return 0.0
-    parts = ts.split(":")
-    try:
-        if len(parts) == 3:
-            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-        elif len(parts) == 2:
-            return float(parts[0]) * 60 + float(parts[1])
-    except Exception:
-        pass
-    return 0.0
 
 
 class VideoAnalysisTracker:
@@ -298,12 +268,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
         }
 
         # 1. Compute real SHA-256 hash of the video file
-        import hashlib
-        hasher = hashlib.sha256()
-        with open(filepath, "rb") as f:
-            while chunk := f.read(65536):
-                hasher.update(chunk)
-        video_sha256 = hasher.hexdigest()
+        video_sha256 = pipeline.compute_file_hash(filepath)
 
         # 2. Run real YOLOv11 + ByteTrack tracking at 4 FPS with tracklet merging and live progress callback
         def _yolo_progress(pct, cur_f, tot_f):
@@ -314,7 +279,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
                 stage_description=f"YOLOv11 detection & ByteTrack tracking (Frame {cur_f}/{tot_f} - {pct:.1f}%)...",
             )
 
-        track_res = yolo_detector.process_video_with_tracking(
+        track_res = pipeline.run_detection_and_tracking(
             filepath,
             sample_fps=4.0,
             conf_thresh=0.25,
@@ -329,7 +294,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
             stage="ocr",
             stage_description="Extracting embedded CCTV timestamps and OSD text via EasyOCR...",
         )
-        ocr_res = ocr_service.extract_timestamp_and_text(filepath)
+        ocr_res = pipeline.run_ocr(filepath)
         result["ocr"] = ocr_res
 
         # Clean up previous events and entities for this investigation to eliminate stale track fragments
@@ -342,82 +307,11 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
         ).delete()
         db.commit()
 
-        # 3. Persist tracked entities to EntityModel
-        ELIGIBLE_SUBJECT_CLASSES = {
-            "person": "person",
-            "car": "vehicle",
-            "truck": "vehicle",
-            "bus": "vehicle",
-            "motorcycle": "vehicle",
-            "bicycle": "vehicle",
-            "backpack": "baggage",
-            "handbag": "baggage",
-            "suitcase": "baggage",
-            "cell phone": "object",
-            "laptop": "object",
-        }
-
-        # Persist only genuine security subjects to EntityModel
+        # 3. Persist only genuine security subjects to EntityModel
         tracks = track_res.get("tracks", [])
-        registered_entities = []
-        for t in tracks:
-            cls_name = str(t.get("class", "")).lower()
-            if cls_name not in ELIGIBLE_SUBJECT_CLASSES:
-                # Skip non-subject objects (furniture, plants, decor, etc.)
-                continue
-
-            entity_id = t["entity_id"]
-            ent_type = ELIGIBLE_SUBJECT_CLASSES[cls_name]
-            avg_conf = round(float(t.get("avg_confidence", 0.85)) * 100, 1)
-            first_sec = float(t.get("first_seen_sec", 0.0))
-            last_sec = float(t.get("last_seen_sec", 1.0))
-            dur = round(last_sec - first_sec, 1)
-
-            first_seen_str = format_timestamp(first_sec)
-            last_seen_str = format_timestamp(last_sec)
-            dur_str = f"{dur}s"
-
-            if str(entity_id).lower().startswith(("person", "vehicle", "car")):
-                label_str = entity_id
-            else:
-                label_str = f"Person {entity_id}" if ent_type == "person" else f"{cls_name.title()} {entity_id}"
-
-            ent_key = f"{inv_id}:{entity_id}"
-            ent_rec = db.query(EntityModel).filter(EntityModel.id == ent_key).first()
-            if not ent_rec:
-                ent_rec = EntityModel(
-                    id=ent_key,
-                    investigation_id=inv_id,
-                    video_id=video_id,
-                    type=ent_type,
-                    label=label_str,
-                    confidence=avg_conf,
-                    first_seen=first_seen_str,
-                    last_seen=last_seen_str,
-                    track_duration=dur_str,
-                    metadata_json={"trajectory": t["trajectory"], "class": cls_name, "video_id": video_id},
-                )
-                db.add(ent_rec)
-            else:
-                ent_rec.video_id = video_id
-                ent_rec.type = ent_type
-                ent_rec.label = label_str
-                ent_rec.confidence = avg_conf
-                ent_rec.first_seen = first_seen_str
-                ent_rec.last_seen = last_seen_str
-                ent_rec.track_duration = dur_str
-                ent_rec.metadata_json = {"trajectory": t["trajectory"], "class": cls_name, "video_id": video_id}
-
-            registered_entities.append({
-                "id": entity_id,
-                "type": ent_type,
-                "label": label_str,
-                "confidence": avg_conf,
-                "first_seen": first_seen_str,
-                "last_seen": last_seen_str,
-                "track_duration": dur_str,
-                "video_id": video_id,
-            })
+        registered_entities = pipeline.register_entities(
+            db, tracks, inv_id=inv_id, video_id=video_id, camera_id=camera_id
+        )
 
         analysis_tracker.update_progress(
             video_id,
@@ -434,7 +328,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
             stage="action",
             stage_description="Analyzing behavioral actions and spatio-temporal interactions...",
         )
-        actions_per_track = action_service.classify_actions(
+        actions_per_track = pipeline.run_action_recognition(
             tracks=tracks,
             video_metadata={"fps": track_res.get("fps"), "duration": track_res.get("duration_seconds")},
         )
@@ -447,19 +341,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
             stage="temporal_activity",
             stage_description="Executing direct temporal video activity recognition (R(2+1)D-18)...",
         )
-        try:
-            temporal_activity_res = temporal_video_service.analyze_video(filepath)
-        except Exception as te:
-            print(f"[VideoAnalysis] Temporal video recognition notice ({te})")
-            temporal_activity_res = {
-                "primary_activity": "Normal Operation",
-                "confidence": 50.0,
-                "severity": "LOW",
-                "model_name": "R(2+1)D-18",
-                "status": f"Execution notice: {te}",
-                "supporting_segments": [],
-                "top_alternatives": [],
-            }
+        temporal_activity_res = pipeline.run_temporal_activity(filepath)
         result["video_activity_recognition"] = temporal_activity_res
 
         # 5. Generate and persist real EventModel records
@@ -715,7 +597,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
                 for evd in all_evidence
             ]
 
-            incident_res = incident_classifier.classify(
+            incident_res = pipeline.run_incident_classification(
                 events=events_dicts,
                 entities=entities_dicts,
                 evidence=evidence_dicts,
@@ -728,7 +610,7 @@ def _execute_analysis_pipeline(video_id: str, db: Session) -> dict:
                 stage="shap",
                 stage_description="Computing TreeSHAP explainability features...",
             )
-            shap_res = shap_service.explain(incident_res.get("extracted_features", {}))
+            shap_res = pipeline.run_shap_explanation(incident_res.get("extracted_features", {}))
             incident_res["shap_explanation"] = shap_res
             incident_res["feature_contributions"] = shap_res["feature_contributions"]
             incident_res["base_value"] = shap_res["base_value"]
@@ -843,7 +725,7 @@ async def run_yolo_detection(
     if not video or not os.path.exists(video.filepath):
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' file not found")
 
-    result = yolo_detector.process_video(
+    result = pipeline.yolo_detector.process_video(
         video.filepath,
         sample_fps=sample_fps,
         conf_thresh=conf_thresh,
@@ -869,7 +751,7 @@ async def run_bytetrack_tracking(
     if not video or not os.path.exists(video.filepath):
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' file not found")
 
-    result = yolo_detector.process_video_with_tracking(
+    result = pipeline.yolo_detector.process_video_with_tracking(
         video.filepath,
         sample_fps=sample_fps,
         conf_thresh=conf_thresh,
@@ -926,14 +808,14 @@ async def run_action_recognition(
     if not video or not os.path.exists(video.filepath):
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' file not found")
 
-    track_result = yolo_detector.process_video_with_tracking(
+    track_result = pipeline.yolo_detector.process_video_with_tracking(
         video.filepath,
         sample_fps=sample_fps,
         conf_thresh=conf_thresh,
     )
 
     tracks = track_result.get("tracks", [])
-    actions_per_track = action_service.classify_actions(
+    actions_per_track = pipeline.action_service.classify_actions(
         tracks=tracks,
         video_metadata={"fps": track_result.get("fps"), "duration": track_result.get("duration_seconds")},
     )
@@ -1041,4 +923,4 @@ def get_video_ocr(video_id: str, db: Session = Depends(get_db)):
     if not video or not os.path.exists(video.filepath):
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' file not found")
 
-    return ocr_service.extract_timestamp_and_text(video.filepath)
+    return pipeline.ocr_service.extract_timestamp_and_text(video.filepath)

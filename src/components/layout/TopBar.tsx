@@ -5,30 +5,15 @@ import {
   AlertTriangle, AlertOctagon, Video, FileText, Check, ChevronRight
 } from 'lucide-react';
 import { checkSystemHealth } from '../../api/system';
-import { getInvestigation } from '../../api/investigations';
 import { getNotifications, type NotificationItem } from '../../api/notifications';
-
-interface InvestigatorProfile {
-  name: string;
-  role: string;
-  badge: string;
-  department: string;
-  email: string;
-}
-
-const DEFAULT_PROFILE: InvestigatorProfile = {
-  name: 'Insp. R. Sharma',
-  role: 'Senior Investigator',
-  badge: 'B-4082',
-  department: 'Cyber & CCTV Forensic Division',
-  email: 'r.sharma@investigation.gov',
-};
+import { useCaseIntel, type InvestigatorProfile } from '../../context/CaseIntelContext';
 
 export default function TopBar() {
   const navigate = useNavigate();
+  const { activeCaseId, setActiveCaseId, investigation, profile, updateProfile } = useCaseIntel();
   const [now, setNow] = useState(new Date());
   const [isLive, setIsLive] = useState(false);
-  const [activeCase, setActiveCase] = useState<{ caseNumber: string; status: string } | null>(null);
+  const activeCase = investigation ? { caseNumber: investigation.caseNumber, status: investigation.status } : null;
 
   // ── Live Notifications State ─────────────────────────────────────────────
   const notifRef = useRef<HTMLDivElement>(null);
@@ -48,8 +33,7 @@ export default function TopBar() {
     let mounted = true;
     const fetchNotifs = async () => {
       try {
-        const activeId = localStorage.getItem('caseintel-active-case-id') || undefined;
-        const res = await getNotifications(activeId);
+        const res = await getNotifications(activeCaseId || undefined);
         if (mounted) {
           setNotifications(res.notifications || []);
         }
@@ -60,14 +44,11 @@ export default function TopBar() {
 
     fetchNotifs();
     const interval = setInterval(fetchNotifs, 10000);
-    const handler = () => fetchNotifs();
-    window.addEventListener('active-case-changed', handler);
     return () => {
       mounted = false;
       clearInterval(interval);
-      window.removeEventListener('active-case-changed', handler);
     };
-  }, []);
+  }, [activeCaseId]);
 
   // Dismiss notification popover on click outside or Escape
   useEffect(() => {
@@ -112,8 +93,7 @@ export default function TopBar() {
     markAsRead(item.id);
     setIsNotifOpen(false);
     if (item.investigationId) {
-      localStorage.setItem('caseintel-active-case-id', item.investigationId);
-      window.dispatchEvent(new Event('active-case-changed'));
+      setActiveCaseId(item.investigationId);
     }
     navigate(item.link);
   };
@@ -136,54 +116,16 @@ export default function TopBar() {
     };
   }, []);
 
-  // Fetch real case details from backend when active-case-id changes
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      const activeId = localStorage.getItem('caseintel-active-case-id');
-      if (!activeId) { if (mounted) setActiveCase(null); return; }
-      try {
-        const data = await getInvestigation(activeId);
-        if (mounted) setActiveCase({ caseNumber: data.caseNumber, status: data.status });
-      } catch {
-        if (mounted) setActiveCase(null);
-      }
-    };
-    load();
-    const handler = () => load();
-    window.addEventListener('active-case-changed', handler);
-    return () => { mounted = false; window.removeEventListener('active-case-changed', handler); };
-  }, []);
-
-  const [profile, setProfile] = useState<InvestigatorProfile>(() => {
-    const saved = localStorage.getItem('investigator-profile');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
-    return DEFAULT_PROFILE;
-  });
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [editForm, setEditForm] = useState<InvestigatorProfile>(profile);
 
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(interval);
-  }, []);
-
+    setEditForm(profile);
+  }, [profile]);
 
   useEffect(() => {
-    const handler = () => {
-      const saved = localStorage.getItem('investigator-profile');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          setProfile(parsed);
-          setEditForm(parsed);
-        } catch (e) {}
-      }
-    };
-    window.addEventListener('profile-updated', handler);
-    return () => window.removeEventListener('profile-updated', handler);
+    const interval = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const timeStr = now.toLocaleTimeString('en-IN', { hour12: false });
@@ -191,10 +133,8 @@ export default function TopBar() {
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('investigator-profile', JSON.stringify(editForm));
-    setProfile(editForm);
+    updateProfile(editForm);
     setIsProfileOpen(false);
-    window.dispatchEvent(new Event('profile-updated'));
   };
 
   return (

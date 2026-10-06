@@ -10,7 +10,10 @@ import cv2
 from typing import Dict, Any, List, Optional, Callable
 from ultralytics import YOLO
 
-MODEL_PATH = os.getenv("YOLO_WEIGHTS_PATH", "yolo11n.pt")
+_DEFAULT_WEIGHTS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "yolo11n.pt"
+)
+MODEL_PATH = os.getenv("YOLO_WEIGHTS_PATH", _DEFAULT_WEIGHTS)
 
 
 class YOLOv11DetectorService:
@@ -35,7 +38,7 @@ class YOLOv11DetectorService:
             return []
 
         h, w = frame.shape[:2]
-        results = self.model.predict(source=frame, conf=conf_thresh, verbose=False)
+        results = self.model.predict(source=frame, conf=conf_thresh, iou=0.45, verbose=False)
         detections = []
 
         if not results:
@@ -126,10 +129,11 @@ class YOLOv11DetectorService:
                             tracker="bytetrack.yaml",
                             persist=True,
                             conf=conf_thresh,
+                            iou=0.45,
                             verbose=False,
                         )
                     except Exception:
-                        results = self.model.predict(source=frame, conf=conf_thresh, verbose=False)
+                        results = self.model.predict(source=frame, conf=conf_thresh, iou=0.45, verbose=False)
 
                     if results and results[0].boxes is not None:
                         boxes = results[0].boxes
@@ -459,14 +463,150 @@ class YOLOv11DetectorService:
         for idx, b in enumerate(baggage, start=1):
             b["entity_id"] = f"Baggage-{idx:02d}"
 
-        # Standardize objects/property entity IDs sequentially (Object-01, Object-02)
-        objects = [t for t in other_tracks if str(t.get("class", "")).lower() in ["cell phone", "laptop"]]
-        for idx, o in enumerate(objects, start=1):
+        # Deduplicate and merge overlapping/fragmented object tracks (phones, laptops)
+        raw_objects = [t for t in other_tracks if str(t.get("class", "")).lower() in ["cell phone", "laptop"]]
+        merged_objects = self._merge_object_tracks(raw_objects)
+
+        # Standardize objects/property entity IDs sequentially (Phone-01, Phone-02, Laptop-01...)
+        for idx, o in enumerate(merged_objects, start=1):
             cls_lower = str(o.get("class", "")).lower()
             tag = "Phone" if "phone" in cls_lower else "Laptop"
             o["entity_id"] = f"{tag}-{idx:02d}"
 
-        return merged_persons + vehicles + baggage + objects
+        other_non_objects = [
+            t for t in other_tracks
+            if str(t.get("class", "")).lower() not in ["person", "car", "truck", "bus", "motorcycle", "bicycle", "backpack", "handbag", "suitcase", "cell phone", "laptop"]
+        ]
+        return merged_persons + vehicles + baggage + merged_objects + other_non_objects
+
+    def _merge_object_tracks(
+        self,
+        object_tracks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge overlapping duplicate object tracklets (e.g. cell phones, laptops) representing
+        the same physical object, while keeping genuinely distinct separate objects apart.
+        """
+        if len(object_tracks) <= 1:
+            return object_tracks
+
+        # Group candidates by class (e.g. cell phone vs laptop)
+        by_class: Dict[str, List[Dict[str, Any]]] = {}
+        for t in object_tracks:
+            cls = str(t.get("class", "")).lower()
+            by_class.setdefault(cls, []).append(t)
+
+        all_merged: List[Dict[str, Any]] = []
+
+        for cls, candidates in by_class.items():
+            if len(candidates) <= 1:
+                all_merged.extend(candidates)
+                continue
+
+            # Sort chronologically by first appearance, then longer track first
+            candidates.sort(key=lambda x: (x.get("first_seen_sec", 0.0), -(x.get("last_seen_sec", 0.0) - x.get("first_seen_sec", 0.0))))
+
+            merged_for_cls: List[Dict[str, Any]] = []
+            for cand in candidates:
+                cand_first = cand.get("first_seen_sec", 0.0)
+                cand_last = cand.get("last_seen_sec", 0.0)
+                cand_traj = cand.get("trajectory", [])
+                c_start = cand_traj[0] if cand_traj else {"x": 0.0, "y": 0.0}
+                cx_start = c_start.get("center_x", c_start.get("x", 0.0))
+                cy_start = c_start.get("center_y", c_start.get("y", 0.0))
+
+                matched_idx = None
+                best_score = 999.0
+
+                for idx, existing in enumerate(merged_for_cls):
+                    e_traj = existing.get("trajectory", [])
+                    e_last = existing.get("last_seen_sec", 0.0)
+                    e_end = e_traj[-1] if e_traj else {"x": 0.0, "y": 0.0}
+                    ex_end = e_end.get("center_x", e_end.get("x", 0.0))
+                    ey_end = e_end.get("center_y", e_end.get("y", 0.0))
+
+                    # Check simultaneous overlapping frames
+                    e_pts = {round(p.get("timestamp_sec", 0.0), 1): p for p in e_traj}
+                    c_pts = {round(p.get("timestamp_sec", 0.0), 1): p for p in cand_traj}
+                    common_ts = set(e_pts.keys()) & set(c_pts.keys())
+
+                    if common_ts:
+                        ious = []
+                        center_dists = []
+                        for t in common_ts:
+                            p_e = e_pts[t]
+                            p_c = c_pts[t]
+                            x1_a, y1_a = p_e.get("x", 0.0), p_e.get("y", 0.0)
+                            x2_a, y2_a = x1_a + p_e.get("w", 0.0), y1_a + p_e.get("h", 0.0)
+                            x1_b, y1_b = p_c.get("x", 0.0), p_c.get("y", 0.0)
+                            x2_b, y2_b = x1_b + p_c.get("w", 0.0), y1_b + p_c.get("h", 0.0)
+                            ix1, iy1 = max(x1_a, x1_b), max(y1_a, y1_b)
+                            ix2, iy2 = min(x2_a, x2_b), min(y2_a, y2_b)
+                            iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+                            inter = iw * ih
+                            union = (x2_a - x1_a) * (y2_a - y1_a) + (x2_b - x1_b) * (y2_b - y1_b) - inter
+                            iou = (inter / union) if union > 0 else 0.0
+                            ious.append(iou)
+
+                            cdist = math.hypot(
+                                p_e.get("center_x", x1_a) - p_c.get("center_x", x1_b),
+                                p_e.get("center_y", y1_a) - p_c.get("center_y", y1_b),
+                            )
+                            center_dists.append(cdist)
+
+                        avg_iou = sum(ious) / len(ious)
+                        avg_dist = sum(center_dists) / len(center_dists)
+
+                        # Same physical object: concurrent frames overlap substantially (IoU > 0.20 or center_dist < 8.0%)
+                        if avg_iou > 0.20 or avg_dist < 8.0:
+                            if avg_dist < best_score:
+                                best_score = avg_dist
+                                matched_idx = idx
+                            continue
+                        else:
+                            # Spatially separate concurrent objects (e.g. 2 different phones) -> do NOT merge
+                            continue
+
+                    # Non-overlapping: check temporal gap and spatial displacement
+                    time_gap = cand_first - e_last
+                    if 0.0 <= time_gap <= 6.0:
+                        dist = math.hypot(cx_start - ex_end, cy_start - ey_end)
+                        if dist <= 12.0:  # Same physical object within 12% frame displacement
+                            if dist < best_score:
+                                best_score = dist
+                                matched_idx = idx
+
+                if matched_idx is not None:
+                    target = merged_for_cls[matched_idx]
+                    existing_ts = {round(p.get("timestamp_sec", 0.0), 2): p for p in target["trajectory"]}
+                    for p in cand_traj:
+                        ts = round(p.get("timestamp_sec", 0.0), 2)
+                        if ts not in existing_ts:
+                            target["trajectory"].append(p)
+                        else:
+                            # Keep higher confidence detection box on concurrent frames
+                            if p.get("confidence", 0) > existing_ts[ts].get("confidence", 0):
+                                existing_ts[ts]["x"] = p["x"]
+                                existing_ts[ts]["y"] = p["y"]
+                                existing_ts[ts]["w"] = p["w"]
+                                existing_ts[ts]["h"] = p["h"]
+                                existing_ts[ts]["center_x"] = p.get("center_x", p["x"])
+                                existing_ts[ts]["center_y"] = p.get("center_y", p["y"])
+                                existing_ts[ts]["confidence"] = p["confidence"]
+
+                    target["trajectory"].sort(key=lambda p: p.get("timestamp_sec", 0.0))
+                    target["first_seen_sec"] = min(target.get("first_seen_sec", 0.0), cand_first)
+                    target["last_seen_sec"] = max(target.get("last_seen_sec", 0.0), cand_last)
+                    target["observations_count"] = len(target["trajectory"])
+                    conf_a = target.get("avg_confidence", 0.5)
+                    conf_b = cand.get("avg_confidence", 0.5)
+                    target["avg_confidence"] = round(max(conf_a, conf_b), 3)
+                else:
+                    merged_for_cls.append(cand)
+
+            all_merged.extend(merged_for_cls)
+
+        return all_merged
 
 
     def process_video(

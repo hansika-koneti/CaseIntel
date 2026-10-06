@@ -9,6 +9,7 @@ import {
   type InvestigationSummary as InvestigationItem,
 } from '../api/investigations';
 import { normalizeLocationName } from '../utils/location';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', {
@@ -37,33 +38,10 @@ export default function InvestigationsPage() {
   const [severity, setSeverity] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>('HIGH');
   const [status, setStatus] = useState<'under_investigation' | 'closed' | 'pending'>('under_investigation');
 
-  // ── Active Case (UI-only, kept in localStorage) ─────────────────────────
-  const [activeCaseId, setActiveCaseId] = useState(() => {
-    return localStorage.getItem('caseintel-active-case-id') || '';
-  });
-
-  useEffect(() => {
-    const handler = () => {
-      setActiveCaseId(localStorage.getItem('caseintel-active-case-id') || '');
-    };
-    window.addEventListener('active-case-changed', handler);
-    return () => window.removeEventListener('active-case-changed', handler);
-  }, []);
-
-  // ── Investigator profile (UI-only, kept in localStorage) ─────────────────
-  const [investigatorName, setInvestigatorName] = useState('Insp. R. Sharma');
-
-  useEffect(() => {
-    const loadProfile = () => {
-      const saved = localStorage.getItem('investigator-profile');
-      if (saved) {
-        try { setInvestigatorName(JSON.parse(saved).name); } catch (e) {}
-      }
-    };
-    loadProfile();
-    window.addEventListener('profile-updated', loadProfile);
-    return () => window.removeEventListener('profile-updated', loadProfile);
-  }, []);
+  // ── Active case + investigator profile (centralized context) ───────────
+  const { activeCaseId: ctxActiveCaseId, setActiveCaseId, setActiveVideoId, profile } = useCaseIntel();
+  const activeCaseId = ctxActiveCaseId || '';
+  const investigatorName = profile.name;
 
   // ── Fetch investigations from FastAPI ─────────────────────────────────────
   const fetchInvestigations = useCallback(async () => {
@@ -72,11 +50,8 @@ export default function InvestigationsPage() {
     try {
       const data = await getInvestigations();
       setInvestigations(data);
-      const currentActive = localStorage.getItem('caseintel-active-case-id');
-      if ((!currentActive || !data.some(i => i.id === currentActive)) && data.length > 0) {
-        localStorage.setItem('caseintel-active-case-id', data[0].id);
+      if ((!ctxActiveCaseId || !data.some(i => i.id === ctxActiveCaseId)) && data.length > 0) {
         setActiveCaseId(data[0].id);
-        window.dispatchEvent(new Event('active-case-changed'));
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to connect to FastAPI backend';
@@ -84,6 +59,7 @@ export default function InvestigationsPage() {
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -117,11 +93,8 @@ export default function InvestigationsPage() {
     try {
       const newInv = await createInvestigation(payload);
       setInvestigations(prev => [newInv, ...prev]);
-      localStorage.setItem('caseintel-active-case-id', newInv.id);
-      localStorage.removeItem('caseintel-active-video-id');
       setActiveCaseId(newInv.id);
-      window.dispatchEvent(new Event('active-case-changed'));
-      window.dispatchEvent(new Event('active-video-changed'));
+      setActiveVideoId(null);
       setIsModalOpen(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to create investigation on backend';
@@ -211,10 +184,8 @@ export default function InvestigationsPage() {
                 <div
                   key={inv.id}
                   onClick={() => {
-                    localStorage.setItem('caseintel-active-case-id', inv.id);
-                    localStorage.removeItem('caseintel-active-video-id');
-                    window.dispatchEvent(new Event('active-case-changed'));
-                    window.dispatchEvent(new Event('active-video-changed'));
+                    setActiveCaseId(inv.id);
+                    setActiveVideoId(null);
                     navigate('/');
                   }}
                   className="flex items-center gap-4 px-5 py-4 cursor-pointer group transition-colors"

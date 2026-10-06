@@ -5,6 +5,7 @@ import { getEvidence, getChainOfCustody, type ChainOfCustody } from '../api/evid
 import { getEvents } from '../api/events';
 import type { Evidence, InvestigationEvent } from '../types';
 import { ConfidenceMeter } from '../components/common/ConfidenceMeter';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 function EvidenceFramePlaceholder({
   evidenceId,
@@ -71,8 +72,10 @@ export default function EvidencePage() {
   const [filterKey, setFilterKey] = useState<'all' | 'key'>('all');
   const [markedImportant, setMarkedImportant] = useState<Set<string>>(new Set<string>());
 
+  const { activeCaseId } = useCaseIntel();
+
   const fetchEvidence = useCallback(async () => {
-    const activeId = localStorage.getItem('caseintel-active-case-id');
+    const activeId = activeCaseId;
     if (!activeId) {
       setLoading(false);
       setError('No active investigation. Upload a video on the CCTV Analysis page.');
@@ -93,16 +96,11 @@ export default function EvidencePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeCaseId]);
 
+  // Re-fetches automatically whenever the active case changes
   useEffect(() => {
     fetchEvidence();
-  }, [fetchEvidence]);
-
-  useEffect(() => {
-    const handler = () => fetchEvidence();
-    window.addEventListener('active-case-changed', handler);
-    return () => window.removeEventListener('active-case-changed', handler);
   }, [fetchEvidence]);
 
   // Fetch chain of custody when evidence is selected

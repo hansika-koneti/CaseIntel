@@ -7,6 +7,7 @@ import type { Investigation, Entity } from '../types';
 import { EntityTypeBadge } from '../components/common/StatusBadge';
 import { ConfidenceMeter } from '../components/common/ConfidenceMeter';
 import { normalizeLocationName } from '../utils/location';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 function parseTimestampToSeconds(ts: string): number {
   if (!ts) return 0;
@@ -28,6 +29,7 @@ function parseTimestampToSeconds(ts: string): number {
 
 export default function VideoAnalysisPage() {
   const navigate = useNavigate();
+  const { activeCaseId, setActiveCaseId, activeVideoId: ctxActiveVideoId, setActiveVideoId } = useCaseIntel();
   const [searchParams, setSearchParams] = useSearchParams();
   const [playing, setPlaying] = useState(false);
   const [currentTimeFormatted, setCurrentTimeFormatted] = useState('00:00');
@@ -86,24 +88,23 @@ export default function VideoAnalysisPage() {
   useEffect(() => {
     let mounted = true;
     const loadCase = async () => {
-      let activeId = localStorage.getItem('caseintel-active-case-id');
+      let targetCaseId = activeCaseId;
       const urlVid = searchParams.get('video_id');
 
       // If video_id in URL is specified, ensure we load its parent investigation
       if (urlVid) {
         try {
           const vInfo = await getVideoInfo(urlVid);
-          if (vInfo && vInfo.investigationId && vInfo.investigationId !== activeId) {
-            activeId = vInfo.investigationId;
-            localStorage.setItem('caseintel-active-case-id', activeId);
-            window.dispatchEvent(new Event('active-case-changed'));
+          if (vInfo && vInfo.investigationId && vInfo.investigationId !== targetCaseId) {
+            targetCaseId = vInfo.investigationId;
+            setActiveCaseId(targetCaseId);
           }
         } catch {
           // ignore lookup error
         }
       }
 
-      if (!activeId) {
+      if (!targetCaseId) {
         if (mounted) {
           setInv(null);
           setLoading(false);
@@ -113,7 +114,7 @@ export default function VideoAnalysisPage() {
       }
       setLoading(true);
       setError(null);
-      getInvestigation(activeId)
+      getInvestigation(targetCaseId)
         .then(data => {
           if (!mounted) return;
           setInv(data);
@@ -144,9 +145,8 @@ export default function VideoAnalysisPage() {
     };
 
     loadCase();
-    window.addEventListener('active-case-changed', loadCase);
-    return () => { mounted = false; window.removeEventListener('active-case-changed', loadCase); };
-  }, [searchParams]);
+    return () => { mounted = false; };
+  }, [searchParams, activeCaseId, setActiveCaseId]);
 
   // 60 FPS requestAnimationFrame loop for continuous, smooth bounding box updates
   useEffect(() => {
@@ -196,7 +196,7 @@ export default function VideoAnalysisPage() {
   // 1. URL search param ?video_id=... (if valid)
   // 2. Investigation activeVideoId from backend
   // 3. Investigation videoId from backend
-  // 4. Stored active video ID in localStorage (if valid)
+  // 4. Stored active video ID in context (if valid)
   // 5. Most recent video in inv.videos[0]
   let activeVideoId: string | null = null;
   if (urlVideoId && availableVideos.some(v => v.id === urlVideoId)) {
@@ -205,21 +205,18 @@ export default function VideoAnalysisPage() {
     activeVideoId = inv.activeVideoId;
   } else if (inv?.videoId && availableVideos.some(v => v.id === inv.videoId)) {
     activeVideoId = inv.videoId;
-  } else {
-    const stored = localStorage.getItem('caseintel-active-video-id');
-    if (stored && availableVideos.some(v => v.id === stored)) {
-      activeVideoId = stored;
-    } else if (availableVideos.length > 0) {
-      activeVideoId = availableVideos[0].id;
-    }
+  } else if (ctxActiveVideoId && availableVideos.some(v => v.id === ctxActiveVideoId)) {
+    activeVideoId = ctxActiveVideoId;
+  } else if (availableVideos.length > 0) {
+    activeVideoId = availableVideos[0].id;
   }
 
-  // Synchronize localStorage in an effect to avoid render side effects
+  // Synchronize context in an effect to avoid render side effects
   useEffect(() => {
-    if (activeVideoId && localStorage.getItem('caseintel-active-video-id') !== activeVideoId) {
-      localStorage.setItem('caseintel-active-video-id', activeVideoId);
+    if (activeVideoId && ctxActiveVideoId !== activeVideoId) {
+      setActiveVideoId(activeVideoId);
     }
-  }, [activeVideoId]);
+  }, [activeVideoId, ctxActiveVideoId, setActiveVideoId]);
 
   const [ocrInfo, setOcrInfo] = useState<{ detected: boolean; status: string; timestamp?: string | null; engine?: string } | null>(null);
 
@@ -417,7 +414,7 @@ export default function VideoAnalysisPage() {
   const handleSwitchVideo = async (newVidId: string) => {
     if (!inv || newVidId === activeVideoId) return;
     setSearchParams({ video_id: newVidId });
-    localStorage.setItem('caseintel-active-video-id', newVidId);
+    setActiveVideoId(newVidId);
     try {
       await setActiveVideo(inv.id, newVidId);
       const freshInv = await getInvestigation(inv.id);
@@ -825,7 +822,7 @@ export default function VideoAnalysisPage() {
                       <div className="flex items-center gap-2">
                         {ent.type === 'person' ? (
                           <User size={12} style={{ color: '#2563eb' }} />
-                        ) : ent.type === 'object' || ent.type === 'phone' ? (
+                        ) : ent.type === 'object' || (ent.type as string) === 'phone' ? (
                           <Smartphone size={12} style={{ color: '#0891b2' }} />
                         ) : (
                           <Car size={12} style={{ color: '#7c3aed' }} />

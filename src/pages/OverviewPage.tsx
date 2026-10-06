@@ -1,11 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Shield, Clock, Video, Users, Car, Zap,
   AlertTriangle, TrendingUp, FileText, ChevronRight, Activity
 } from 'lucide-react';
-import { getInvestigation } from '../api/investigations';
-import type { Investigation } from '../types';
+import { useCaseIntel } from '../context/CaseIntelContext';
 import { StatusBadge, SeverityBadge } from '../components/common/StatusBadge';
 import { ConfidenceMeter, ConfidenceRing } from '../components/common/ConfidenceMeter';
 import { formatTimestamp, normalizeLocationName } from '../utils/formatters';
@@ -39,64 +38,19 @@ export default function OverviewPage() {
   const navigate = useNavigate();
   const [hoveredEvent, setHoveredEvent] = useState<string | null>(null);
 
-  const [inv, setInv] = useState<Investigation | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Active investigation + profile come from the centralized context
+  const {
+    investigation: inv,
+    investigationLoading: loading,
+    investigationError: error,
+    profile,
+  } = useCaseIntel();
 
-  const fetchActiveInvestigation = useCallback(async () => {
-    const activeId = localStorage.getItem('caseintel-active-case-id');
-    if (!activeId) {
-      setInv(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getInvestigation(activeId);
-      setInv(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load investigation');
-      setInv(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchActiveInvestigation();
-  }, [fetchActiveInvestigation]);
-
-  useEffect(() => {
-    const handler = () => fetchActiveInvestigation();
-    window.addEventListener('active-case-changed', handler);
-    return () => window.removeEventListener('active-case-changed', handler);
-  }, [fetchActiveInvestigation]);
-
-  const [investigatorName, setInvestigatorName] = useState(() => {
-    const saved = localStorage.getItem('investigator-profile');
-    if (saved) {
-      try { return JSON.parse(saved).name; } catch (e) {}
-    }
-    return inv?.investigator ?? 'Unassigned';
-  });
-
-  useEffect(() => {
-    const handler = () => {
-      const saved = localStorage.getItem('investigator-profile');
-      if (saved) {
-        try { setInvestigatorName(JSON.parse(saved).name); } catch (e) {}
-      }
-    };
-    window.addEventListener('profile-updated', handler);
-    return () => window.removeEventListener('profile-updated', handler);
-  }, []);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('investigator-profile');
-    if (!saved && inv?.investigator) setInvestigatorName(inv.investigator);
-  }, [inv]);
+  // Prefer an explicitly configured profile; otherwise fall back to the case's assignee
+  const investigatorName =
+    profile.name && profile.name !== 'Unassigned'
+      ? profile.name
+      : inv?.investigator ?? 'Unassigned';
 
   if (loading) {
     return (
@@ -131,7 +85,7 @@ export default function OverviewPage() {
 
   const hasAnalysis = Boolean(
     inv.hasAnalysis ??
-    (inv.videoCount > 0 && (inv.events?.length > 0 || (inv.incident && inv.incident.has_analysis !== false && inv.incident.type && inv.incident.type !== 'Unclassified')))
+    (inv.videoCount > 0 && (inv.events?.length > 0 || (inv.incident && inv.incident.hasAnalysis !== false && inv.incident.type && inv.incident.type !== 'Unclassified')))
   );
 
   const suspiciousCount = inv.events.filter(e => e.isSuspicious).length;

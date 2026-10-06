@@ -5,6 +5,7 @@ import type { InvestigationEvent, Evidence } from '../types';
 import { EntityTypeBadge } from '../components/common/StatusBadge';
 import { ConfidenceMeter } from '../components/common/ConfidenceMeter';
 import { normalizeLocationName } from '../utils/location';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 function parseTimestampToSeconds(ts: string): number | null {
   if (!ts) return null;
@@ -45,8 +46,10 @@ export default function EventTimelinePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { activeCaseId } = useCaseIntel();
+
   const fetchEvents = useCallback(async () => {
-    const activeId = localStorage.getItem('caseintel-active-case-id');
+    const activeId = activeCaseId;
     if (!activeId) {
       setEvents([]);
       setEvidenceList([]);
@@ -65,16 +68,11 @@ export default function EventTimelinePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeCaseId]);
 
+  // Re-fetches automatically whenever the active case changes
   useEffect(() => {
     fetchEvents();
-  }, [fetchEvents]);
-
-  useEffect(() => {
-    const handler = () => fetchEvents();
-    window.addEventListener('active-case-changed', handler);
-    return () => window.removeEventListener('active-case-changed', handler);
   }, [fetchEvents]);
 
   const [filterEntity, setFilterEntity]       = useState('all');

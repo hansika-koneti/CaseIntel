@@ -10,12 +10,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.db import InvestigationModel, EntityModel, EventModel, EvidenceModel, VideoModel
-from services.incident_service import XGBoostIncidentClassifierService
-from services.shap_service import SHAPExplainabilityService
+from services.pipeline_orchestrator import pipeline
 
 router = APIRouter()
-incident_service = XGBoostIncidentClassifierService()
-shap_service = SHAPExplainabilityService(incident_service)
+# XGBoost classifier is shared with the analysis pipeline and lazy-loaded on first use.
 
 
 @router.get("/{investigation_id}")
@@ -180,7 +178,7 @@ def get_incident(investigation_id: str, db: Session = Depends(get_db)):
         for evd in evidence_db
     ]
 
-    classification = incident_service.classify(
+    classification = pipeline.incident_classifier.classify(
         events=events,
         entities=entities,
         evidence=evidence,
@@ -191,7 +189,7 @@ def get_incident(investigation_id: str, db: Session = Depends(get_db)):
     classification["case_number"] = inv.case_number
 
     # Compute real TreeSHAP explainability
-    shap_res = shap_service.explain(classification.get("extracted_features", {}))
+    shap_res = pipeline.shap_service.explain(classification.get("extracted_features", {}))
     classification["shap_explanation"] = shap_res
     # Replace feature contributions with real TreeSHAP contributions
     classification["feature_contributions"] = shap_res["feature_contributions"]
@@ -221,13 +219,13 @@ def predict_incident_from_features(features: Dict[str, float] = Body(...)):
     """
     Run XGBoost prediction directly from tabular feature vector.
     """
-    result = incident_service.classify(
+    result = pipeline.incident_classifier.classify(
         events=[],
         entities=[],
         custom_features=features,
     )
     # Compute real TreeSHAP
-    shap_res = shap_service.explain(features)
+    shap_res = pipeline.shap_service.explain(features)
     result["shap_explanation"] = shap_res
     result["feature_contributions"] = shap_res["feature_contributions"]
     result["base_value"] = shap_res["base_value"]
@@ -241,4 +239,4 @@ def compute_shap_from_features(features: Dict[str, float] = Body(...)):
     """
     Compute real TreeSHAP values directly from custom tabular feature vector.
     """
-    return shap_service.explain(features)
+    return pipeline.shap_service.explain(features)

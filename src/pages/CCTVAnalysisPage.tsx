@@ -4,6 +4,7 @@ import { Upload, Settings, CheckCircle, Circle, Loader, AlertCircle, Video } fro
 import { uploadVideo, analyzeVideo, getVideoStatus, type VideoUploadResponse } from '../api/videos';
 import type { PipelineStage } from '../types';
 import { clsx } from 'clsx';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 // Default pipeline stage definitions (labels only — status is always derived from real results)
 const DEFAULT_STAGES: Omit<PipelineStage, 'status' | 'progress'>[] = [
@@ -56,6 +57,7 @@ function PipelineRow({ stage }: { stage: PipelineStage }) {
 
 export default function CCTVAnalysisPage() {
   const navigate = useNavigate();
+  const { activeCaseId, setActiveCaseId, setActiveVideoId } = useCaseIntel();
   const [demoState, setDemoState] = useState<DemoState>('idle');
   const [uploadProgress, setUploadProgress] = useState(0);
   const [stages, setStages] = useState<PipelineStage[]>(makePendingStages());
@@ -92,7 +94,7 @@ export default function CCTVAnalysisPage() {
     let uploadRes: VideoUploadResponse;
     try {
       const t0 = Date.now();
-      const currentActiveInvId = localStorage.getItem('caseintel-active-case-id') || undefined;
+      const currentActiveInvId = activeCaseId || undefined;
       uploadRes = await uploadVideo(
         file,
         {
@@ -107,10 +109,9 @@ export default function CCTVAnalysisPage() {
       completeStage('upload', `${(file.size / (1024 * 1024)).toFixed(1)} MB — ${uploadRes.videoId}`, Date.now() - t0);
       const invId = (uploadRes as any).investigationId as string | undefined;
       if (invId) {
-        localStorage.setItem('caseintel-active-case-id', invId);
-        window.dispatchEvent(new Event('active-case-changed'));
+        setActiveCaseId(invId);
       }
-      localStorage.setItem('caseintel-active-video-id', uploadRes.videoId);
+      setActiveVideoId(uploadRes.videoId);
     } catch (err: unknown) {
 
       const msg = err instanceof Error ? err.message : 'Upload failed';
@@ -187,10 +188,8 @@ export default function CCTVAnalysisPage() {
       }
 
       const resolvedInvId = (analysisRes as any).investigation_id || (analysisRes as any).investigationId;
-      if (resolvedInvId) localStorage.setItem('caseintel-active-case-id', resolvedInvId);
-      if (uploadRes?.videoId) localStorage.setItem('caseintel-active-video-id', uploadRes.videoId);
-      window.dispatchEvent(new Event('active-case-changed'));
-      window.dispatchEvent(new Event('active-video-changed'));
+      if (resolvedInvId) setActiveCaseId(resolvedInvId);
+      if (uploadRes?.videoId) setActiveVideoId(uploadRes.videoId);
       setDemoState('done');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Analysis failed';
@@ -429,8 +428,7 @@ export default function CCTVAnalysisPage() {
                 onClick={() => {
                   const vidId = uploadedVideo?.videoId;
                   if (vidId) {
-                    localStorage.setItem('caseintel-active-video-id', vidId);
-                    window.dispatchEvent(new Event('active-video-changed'));
+                    setActiveVideoId(vidId);
                     navigate(`/cctv-analysis/video?video_id=${vidId}`);
                   } else {
                     navigate('/cctv-analysis/video');

@@ -108,29 +108,21 @@ export interface IncidentResult {
   type: string | null;
   confidence: number;
   severity: Severity | null;
-  incident_risk_score?: number;
   incidentRiskScore?: number;
   featureContributions: FeatureContribution[];
   reasoning: string;
   classifierVersion: string;
-  has_analysis?: boolean;
   hasAnalysis?: boolean;
   status?: string;
-  theft_visually_verified?: boolean;
   theftVisuallyVerified?: boolean;
-  is_hypothesis?: boolean;
   isHypothesis?: boolean;
-  hypothesis_status?: string;
   hypothesisStatus?: string;
-  visual_evidence_summary?: string;
   visualEvidenceSummary?: string;
-  forensic_rule_evaluation?: ForensicRuleStep[];
   forensicRuleEvaluation?: ForensicRuleStep[];
-  verified_observations?: VerifiedObservation[];
   verifiedObservations?: VerifiedObservation[];
-  class_probabilities?: Record<string, number>;
-  extracted_features?: Record<string, number>;
-  base_value?: number;
+  classProbabilities?: Record<string, number>;
+  extractedFeatures?: Record<string, number>;
+  baseValue?: number;
 }
 
 // ── Knowledge Graph ──────────────────────────────────────────
@@ -170,7 +162,7 @@ export interface Report {
   executiveSummary: string;
   sections: ReportSection[];
   disclaimer: string;
-  has_analysis?: boolean;
+  hasAnalysis?: boolean;
 }
 
 // ── Investigation ────────────────────────────────────────────
@@ -191,16 +183,13 @@ export interface Investigation {
   evidence: Evidence[];
   report?: Report;
   aiInsight: string;
-  has_analysis?: boolean;
   hasAnalysis?: boolean;
   videoId?: string;
   activeVideoId?: string;
   videos?: Array<{
     id: string;
     filename: string;
-    camera_id?: string;
     cameraId?: string;
-    uploaded_at?: string;
     uploadedAt?: string;
     status?: string;
     location?: string;

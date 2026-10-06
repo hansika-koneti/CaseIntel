@@ -1,6 +1,27 @@
+# CaseIntel Backend Dependencies
+# Core API Framework
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.7.0
 python-multipart>=0.0.9
+
+# Database
 sqlalchemy>=2.0.0
 alembic>=1.13.0
+
+# ML / Computer Vision Pipeline
+xgboost>=1.8.0
+numpy>=1.26.0
+opencv-python>=4.9.0
+ultralytics>=8.1.0
+shap>=0.44.0
+
+# Deep Learning (Temporal Activity Recognition)
+torch>=2.2.0
+torchvision>=0.17.0
+
+# OCR
+easyocr>=1.7.0
+
+# Knowledge Graph (optional — falls back to in-memory if unavailable)
+neo4j>=5.17.0

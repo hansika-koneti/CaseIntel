@@ -8,6 +8,7 @@ import { StatusBadge, SeverityBadge, EntityTypeBadge } from '../components/commo
 import { ConfidenceMeter } from '../components/common/ConfidenceMeter';
 import { formatTimestamp } from '../utils/formatters';
 import { normalizeLocationName } from '../utils/location';
+import { useCaseIntel } from '../context/CaseIntelContext';
 
 function Section({ title, children, defaultOpen = true }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -44,16 +45,16 @@ export default function InvestigationReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [generateState, setGenerateState] = useState<GenerateState>('idle');
 
-  const [investigatorName, setInvestigatorName] = useState(() => {
-    const saved = localStorage.getItem('investigator-profile');
-    if (saved) {
-      try { return JSON.parse(saved).name; } catch (e) {}
-    }
-    return 'Insp. R. Sharma';
-  });
+  const { activeCaseId, profile } = useCaseIntel();
+
+  // Prefer an explicitly configured profile; otherwise fall back to the case's assignee
+  const investigatorName =
+    profile.name && profile.name !== 'Unassigned'
+      ? profile.name
+      : inv?.investigator ?? 'Unassigned';
 
   const loadCaseData = useCallback(async () => {
-    const activeId = localStorage.getItem('caseintel-active-case-id');
+    const activeId = activeCaseId;
     if (!activeId) {
       setLoading(false);
       setInv(null);
@@ -68,14 +69,9 @@ export default function InvestigationReportPage() {
       const data = await getInvestigation(activeId);
       setInv(data);
 
-      if (data.investigator) {
-        const saved = localStorage.getItem('investigator-profile');
-        if (!saved) setInvestigatorName(data.investigator);
-      }
-
       const hasCaseAnalysis = Boolean(
         data.hasAnalysis ??
-        (data.videoCount > 0 && (data.events?.length > 0 || (data.incident && data.incident.has_analysis !== false && data.incident.type && data.incident.type !== 'Unclassified')))
+        (data.videoCount > 0 && (data.events?.length > 0 || (data.incident && data.incident.hasAnalysis !== false && data.incident.type && data.incident.type !== 'Unclassified')))
       );
 
       if (hasCaseAnalysis) {
@@ -100,28 +96,12 @@ export default function InvestigationReportPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeCaseId]);
 
+  // Reloads automatically whenever the active case changes in context
   useEffect(() => {
     loadCaseData();
   }, [loadCaseData]);
-
-  useEffect(() => {
-    const handler = () => loadCaseData();
-    window.addEventListener('active-case-changed', handler);
-    return () => window.removeEventListener('active-case-changed', handler);
-  }, [loadCaseData]);
-
-  useEffect(() => {
-    const handler = () => {
-      const saved = localStorage.getItem('investigator-profile');
-      if (saved) {
-        try { setInvestigatorName(JSON.parse(saved).name); } catch (e) {}
-      }
-    };
-    window.addEventListener('profile-updated', handler);
-    return () => window.removeEventListener('profile-updated', handler);
-  }, []);
 
   async function handleGenerate() {
     if (!inv) return;
@@ -160,7 +140,7 @@ export default function InvestigationReportPage() {
 
   const hasAnalysis = Boolean(
     inv.hasAnalysis ??
-    (inv.videoCount > 0 && (inv.events?.length > 0 || (inv.incident && inv.incident.has_analysis !== false && inv.incident.type && inv.incident.type !== 'Unclassified')))
+    (inv.videoCount > 0 && (inv.events?.length > 0 || (inv.incident && inv.incident.hasAnalysis !== false && inv.incident.type && inv.incident.type !== 'Unclassified')))
   );
 
   if (!hasAnalysis) {
@@ -323,8 +303,8 @@ export default function InvestigationReportPage() {
             <div className="space-y-2 flex-1">
               <div className="flex items-center gap-3 flex-wrap">
                 <div className="text-[20px] font-bold" style={{ color: '#0f172a' }}>{inv.incident.type}</div>
-                <SeverityBadge severity={inv.incident.severity} />
-                {(inv.incident.is_hypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theft_visually_verified)) && (
+                <SeverityBadge severity={inv.incident.severity || 'MEDIUM'} />
+                {(inv.incident.isHypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theftVisuallyVerified)) && (
                   <span className="badge badge-amber text-[10px] uppercase font-bold">
                     Model Hypothesis (Unverified)
                   </span>
@@ -337,11 +317,11 @@ export default function InvestigationReportPage() {
             </div>
             <div className="alert-danger p-3 flex items-center gap-2">
               <AlertTriangle size={13} />
-              <span className="text-[12px] font-semibold">{inv.incident.severity} SEVERITY</span>
+              <span className="text-[12px] font-semibold">{inv.incident.severity || 'MEDIUM'} SEVERITY</span>
             </div>
           </div>
 
-          {(inv.incident.is_hypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theft_visually_verified)) && (
+          {(inv.incident.isHypothesis || (inv.incident.type === 'Theft / Tampering' && !inv.incident.theftVisuallyVerified)) && (
             <div className="p-3 rounded-lg border border-amber-200 bg-amber-50/70 text-[11px] text-amber-900 flex items-start gap-2">
               <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
               <div>

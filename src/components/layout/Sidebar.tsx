@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { checkSystemHealth } from '../../api/system';
-import { getInvestigation, getInvestigations } from '../../api/investigations';
+import { getInvestigations } from '../../api/investigations';
+import { useCaseIntel } from '../../context/CaseIntelContext';
 import {
   LayoutDashboard,
   FolderOpen,
@@ -65,38 +66,23 @@ export default function Sidebar() {
     };
   }, []);
 
-  const [activeCase, setActiveCase] = useState<{ caseNumber: string; status: string } | null>(null);
+  const { investigation } = useCaseIntel();
+  const activeCase = investigation ? { caseNumber: investigation.caseNumber, status: investigation.status } : null;
   const [investigationCount, setInvestigationCount] = useState<number>(0);
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      // Load real investigation count
       try {
         const list = await getInvestigations();
         if (mounted) setInvestigationCount(list.length);
       } catch { /* ignore */ }
-
-      // Load active case details
-      const activeId = localStorage.getItem('caseintel-active-case-id');
-      if (!activeId) { if (mounted) setActiveCase(null); return; }
-      try {
-        const data = await getInvestigation(activeId);
-        if (mounted) setActiveCase({ caseNumber: data.caseNumber, status: data.status });
-      } catch {
-        if (mounted) setActiveCase(null);
-      }
     };
     load();
-    const handler = () => load();
-    window.addEventListener('active-case-changed', handler);
-    window.addEventListener('storage', handler);
     return () => {
       mounted = false;
-      window.removeEventListener('active-case-changed', handler);
-      window.removeEventListener('storage', handler);
     };
-  }, []);
+  }, [investigation]);
 
   return (
     <aside className="sidebar-root w-56 flex-shrink-0 flex flex-col h-screen sticky top-0">

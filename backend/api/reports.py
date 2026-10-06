@@ -10,11 +10,10 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models.db import InvestigationModel, EntityModel, EventModel, EvidenceModel, VideoModel
 from services.report_service import LLMReportGeneratorService
-from services.incident_service import XGBoostIncidentClassifierService
+from services.pipeline_orchestrator import pipeline
 
 router = APIRouter()
 report_service = LLMReportGeneratorService()
-incident_service = XGBoostIncidentClassifierService()
 
 
 from services.base import normalize_location_name
@@ -98,7 +97,7 @@ def _get_case_payload(inv: InvestigationModel, db: Session):
             incident_result["severity"] = "HIGH"
             incident_result["is_hypothesis"] = True
     elif has_analysis and (events or entities):
-        incident_result = incident_service.classify(events=events, entities=entities, evidence=evidence)
+        incident_result = pipeline.incident_classifier.classify(events=events, entities=entities, evidence=evidence)
     else:
         incident_result = None
 

@@ -26,3 +26,37 @@ dist-ssr
 # Environment variables — never commit secrets
 .env
 .env.local
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# ML model weights and artifacts
+*.pt
+*.pth
+*.onnx
+*.json.bak
+backend/models/xgboost_incident_model.json
+backend/models/temporal_surveillance_head.pt
+backend/models/yolo11n.pt
+
+# Uploaded CCTV footage
+backend/uploads/
+uploads/
+
+# Scratch / test artifacts
+scratch_*
+extract_frames.py
+evaluate_ucf_crime.py
+test_*.py
+backend/scratch_*
+backend/test_*.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+backend/.venv/

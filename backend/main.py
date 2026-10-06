@@ -3,14 +3,26 @@ CaseIntel — FastAPI Backend
 Entry point for the investigation API server.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from database import engine
 from api import investigations, videos, events, entities, knowledge_graph, incidents, reports, evidence, notifications
+from init_db import init_and_seed_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: runs DB init on startup."""
+    init_and_seed_db()
+    yield
+
 
 app = FastAPI(
     title="CaseIntel API",
     description="AI-Powered CCTV Investigation Assistant — Backend API",
-    version="1.0.0-prototype",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS for frontend dev server
@@ -38,14 +50,6 @@ app.include_router(incidents.router,      prefix="/api/incidents",      tags=["I
 app.include_router(reports.router,        prefix="/api/reports",        tags=["Reports"])
 app.include_router(notifications.router,  prefix="/api/notifications",  tags=["Notifications"])
 
-
-from init_db import init_and_seed_db
-
-@app.on_event("startup")
-def on_startup():
-    init_and_seed_db()
-
-
 @app.get("/")
 def root():
     return {
@@ -67,17 +71,38 @@ def root():
 
 @app.get("/api/health")
 def health():
+    """Health check that probes actual service readiness instead of returning static values."""
+    def _probe(name: str, check_fn) -> str:
+        try:
+            return "online" if check_fn() else "degraded"
+        except Exception:
+            return "offline"
+
+    services = {
+        "yolo_detector": _probe("yolo", lambda: __import__("os").path.exists(
+            __import__("os").path.join(__import__("os").path.dirname(__file__), "models", "yolo11n.pt")
+        )),
+        "xgboost_classifier": _probe("xgboost", lambda: __import__("os").path.exists(
+            __import__("os").path.join(__import__("os").path.dirname(__file__), "models", "xgboost_incident_model.json")
+        )),
+        "temporal_model": _probe("temporal", lambda: __import__("os").path.exists(
+            __import__("os").path.join(__import__("os").path.dirname(__file__), "models", "temporal_surveillance_head.pt")
+        )),
+        "knowledge_graph": _probe("neo4j", lambda: (
+            hasattr(knowledge_graph, "kg_service") and
+            getattr(knowledge_graph.kg_service, "is_connected", False)
+        )),
+        "database": _probe("db", lambda: (
+            engine.connect().close() or True
+        )),
+    }
+
+    all_online = all(s == "online" for s in services.values())
+    any_offline = any(s == "offline" for s in services.values())
+
     return {
-        "status": "healthy",
+        "status": "healthy" if all_online else ("degraded" if not any_offline else "unhealthy"),
         "mode": "live",
-        "services": {
-            "yolo_detector": "online",
-            "bytetrack": "online",
-            "action_recognition": "online",
-            "incident_classifier": "online",
-            "shap_explainer": "online",
-            "knowledge_graph": "online",
-            "report_generator": "online",
-        },
+        "services": services,
     }
 
