@@ -139,6 +139,7 @@ class XGBoostIncidentClassifierService(IncidentClassifierService):
         bag_flag = 0.0
         forced_flag = 0.0
         running_flag = 0.0
+        theft_flag = 0.0
 
         for evt in events:
             action_text = (
@@ -155,9 +156,18 @@ class XGBoostIncidentClassifierService(IncidentClassifierService):
                 forced_flag = 1.0
             if any(w in action_text for w in ["running", "sprint", "speeding", "rapid"]):
                 running_flag = 1.0
+            # Theft / tampering signals from behavioral heuristics and temporal model
+            if any(w in action_text for w in [
+                "theft", "stealing", "stolen", "vehicle theft", "tampering suspected",
+                "possible theft", "theft sequence", "bike theft", "motorcycle theft",
+            ]):
+                theft_flag = 1.0
+                forced_flag = 1.0  # Theft implies forced manipulation of property
 
         # 5. Speed max derived from behavior evidence
-        if forced_flag:
+        if theft_flag:
+            speed_max = 20.0
+        elif forced_flag:
             speed_max = 14.2
         elif running_flag:
             speed_max = 18.5
@@ -200,14 +210,14 @@ class XGBoostIncidentClassifierService(IncidentClassifierService):
 
         for e in events:
             text = (str(e.get("action", "")) + " " + str(e.get("event_type", "")) + " " + str(e.get("description", ""))).lower()
-            if any(w in text for w in ["approach", "zone entry", "entered", "arrived"]):
+            if any(w in text for w in ["approach", "zone entry", "entered", "arrived", "subject entry"]):
                 has_approach = True
-            if any(w in text for w in ["altercation", "physical confrontation", "close proximity", "interaction", "object interaction", "tamper"]):
+            if any(w in text for w in ["altercation", "physical confrontation", "close proximity", "interaction", "object interaction", "tamper", "tampering", "dwell", "crouching", "stationary interaction"]):
                 has_altercation_or_proximity = True
-            if any(w in text for w in ["rapid departure", "speeding", "sprint", "fleeing", "left rapidly"]):
+            if any(w in text for w in ["rapid departure", "speeding", "sprint", "fleeing", "left rapidly", "departed", "rapid", "departure"]):
                 has_rapid_departure = True
-            # Visual disappearance / item taken away
-            if any(w in text for w in ["object disappearance", "item removed", "theft confirmed", "stolen item"]):
+            # Visual disappearance / item taken away / theft corroboration
+            if any(w in text for w in ["object disappearance", "item removed", "theft confirmed", "stolen item", "vehicle theft", "tampering suspected", "theft pattern", "corroborated by temporal"]):
                 has_object_disappearance = True
 
         # Check explicit possible theft sequence

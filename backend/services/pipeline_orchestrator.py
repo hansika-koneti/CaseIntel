@@ -225,11 +225,13 @@ class PipelineOrchestrator:
         self,
         tracks: List[Dict],
         video_metadata: Dict[str, Any],
+        temporal_activity: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Stage 4: Behavioral action classification."""
         return self.action_service.classify_actions(
             tracks=tracks,
             video_metadata=video_metadata,
+            temporal_activity=temporal_activity,
         )
 
     def run_temporal_activity(self, filepath: str) -> Dict[str, Any]:

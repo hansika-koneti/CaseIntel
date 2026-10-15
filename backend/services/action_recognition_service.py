@@ -98,6 +98,7 @@ class ActionRecognitionService(ActionRecognitionBaseService):
         self,
         tracks: List[Dict[str, Any]],
         video_metadata: Optional[Dict[str, Any]] = None,
+        temporal_activity: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Classify behavioral actions per track and evaluate cross-track spatio-temporal
@@ -213,6 +214,16 @@ class ActionRecognitionService(ActionRecognitionBaseService):
             for res in results:
                 if res["entity_id"] == primary_id:
                     res["actions"].append(interaction)
+                    break
+
+        # Single-entity theft/tampering heuristic: when only a person is detected
+        # (no vehicle/object tracks), analyze trajectory phases for theft-consistent behavior
+        single_person_theft = self._evaluate_single_person_theft_heuristic(tracks, temporal_activity)
+        for theft_event in single_person_theft:
+            primary_id = theft_event.get("primary_entity_id")
+            for res in results:
+                if res["entity_id"] == primary_id:
+                    res["actions"].append(theft_event)
                     break
 
         return results
@@ -604,3 +615,194 @@ class ActionRecognitionService(ActionRecognitionBaseService):
                         })
 
         return interactions
+
+    def _evaluate_single_person_theft_heuristic(
+        self,
+        tracks: List[Dict[str, Any]],
+        temporal_activity: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Evaluate single-entity theft/tampering behavioral patterns.
+
+        In many real CCTV theft scenarios (bike stealing, package theft, vehicle break-in),
+        YOLO may only detect the person — the target object (bicycle, parked motorcycle,
+        package) may be occluded, stationary background, or below detection confidence.
+
+        This heuristic detects the classic theft trajectory signature:
+          Phase 1 — APPROACH: Subject enters monitored zone and moves toward a target area
+          Phase 2 — INTERACTION DWELL: Subject becomes stationary or crouches (low speed,
+                    small radius) near the target for a sustained period
+          Phase 3 — RAPID DEPARTURE: Subject rapidly exits the monitored zone
+
+        Additionally boosted by temporal video model (R(2+1)D-18) corroboration.
+        """
+        results: List[Dict[str, Any]] = []
+
+        persons = [t for t in tracks if str(t.get("class", "")).lower() == "person"]
+        vehicles = [t for t in tracks if str(t.get("class", "")).lower() in ["car", "truck", "bus", "motorcycle", "bicycle"]]
+        objects_tracked = [t for t in tracks if str(t.get("class", "")).lower() in ["cell phone", "laptop", "backpack", "handbag", "suitcase"]]
+
+        # Only apply when no vehicles or stealable objects were separately tracked
+        # (if they were tracked, the cross-track interaction logic handles it)
+        if vehicles or objects_tracked:
+            return results
+
+        # Check if temporal deep model corroborates theft
+        temporal_theft_signal = False
+        temporal_theft_conf = 0.0
+        if temporal_activity:
+            primary = str(temporal_activity.get("primary_activity", "")).lower()
+            t_conf = float(temporal_activity.get("confidence", 0.0))
+            if any(kw in primary for kw in ["steal", "theft", "burglar", "break-in", "shoplifting"]):
+                temporal_theft_signal = True
+                temporal_theft_conf = t_conf
+            # Also check clip-level predictions
+            for clip in temporal_activity.get("clip_predictions", []):
+                clip_act = str(clip.get("predicted_activity", "")).lower()
+                clip_conf = float(clip.get("confidence", 0.0))
+                if any(kw in clip_act for kw in ["steal", "theft"]) and clip_conf >= 35.0:
+                    temporal_theft_signal = True
+                    temporal_theft_conf = max(temporal_theft_conf, clip_conf)
+
+        for person in persons:
+            traj = person.get("trajectory", [])
+            if len(traj) < 6:
+                continue
+
+            entity_id = person.get("entity_id", "Person-01")
+            first_seen = float(person.get("first_seen_sec", 0.0))
+            last_seen = float(person.get("last_seen_sec", 0.0))
+            duration = max(0.1, last_seen - first_seen)
+
+            if duration < 3.0:
+                continue
+
+            # Divide trajectory into 3 temporal phases
+            n = len(traj)
+            phase1_end = n // 3
+            phase2_end = 2 * n // 3
+
+            phase1 = traj[:phase1_end]       # Approach
+            phase2 = traj[phase1_end:phase2_end]  # Interaction / Dwell
+            phase3 = traj[phase2_end:]       # Departure
+
+            if len(phase1) < 2 or len(phase2) < 2 or len(phase3) < 2:
+                continue
+
+            # Phase 1: Approach — should show meaningful displacement
+            p1_start = phase1[0]
+            p1_end = phase1[-1]
+            p1_disp = math.hypot(
+                p1_end.get("center_x", p1_end.get("x", 0.0)) - p1_start.get("center_x", p1_start.get("x", 0.0)),
+                p1_end.get("center_y", p1_end.get("y", 0.0)) - p1_start.get("center_y", p1_start.get("y", 0.0)),
+            )
+
+            # Phase 2: Interaction dwell — should show low displacement (stationary/crouching)
+            p2_cx = sum(p.get("center_x", p.get("x", 0.0)) for p in phase2) / len(phase2)
+            p2_cy = sum(p.get("center_y", p.get("y", 0.0)) for p in phase2) / len(phase2)
+            p2_radius = max(
+                math.hypot(
+                    p.get("center_x", p.get("x", 0.0)) - p2_cx,
+                    p.get("center_y", p.get("y", 0.0)) - p2_cy,
+                )
+                for p in phase2
+            )
+            p2_dur = phase2[-1].get("timestamp_sec", 0) - phase2[0].get("timestamp_sec", 0)
+
+            # Check for posture change in phase 2 (crouching = lower aspect ratio)
+            p2_boxes = [p for p in phase2 if "w" in p and "h" in p]
+            p2_aspect = (
+                sum(p["h"] / max(0.1, p["w"]) for p in p2_boxes) / len(p2_boxes)
+            ) if p2_boxes else 2.0
+            is_crouching = p2_aspect < 1.6
+
+            # Phase 3: Departure — should show rapid displacement away
+            p3_start = phase3[0]
+            p3_end = phase3[-1]
+            p3_disp = math.hypot(
+                p3_end.get("center_x", p3_end.get("x", 0.0)) - p3_start.get("center_x", p3_start.get("x", 0.0)),
+                p3_end.get("center_y", p3_end.get("y", 0.0)) - p3_start.get("center_y", p3_start.get("y", 0.0)),
+            )
+            p3_dur = max(0.01, phase3[-1].get("timestamp_sec", 0) - phase3[0].get("timestamp_sec", 0))
+            p3_speed = p3_disp / p3_dur
+
+            # Departure at edge of frame?
+            last_pt = traj[-1]
+            departed_at_edge = (
+                last_pt.get("x", 50.0) > 82.0 or last_pt.get("x", 50.0) < 12.0 or
+                last_pt.get("y", 50.0) > 85.0 or last_pt.get("y", 50.0) < 12.0
+            )
+
+            # Score the theft pattern
+            score = 0.0
+            evidence_details = []
+
+            # Phase 1: approach displacement (person moved toward something)
+            if p1_disp >= 5.0:
+                score += 1.0
+                evidence_details.append(f"Approach displacement: {round(p1_disp, 1)}%")
+            elif p1_disp >= 2.0:
+                score += 0.5
+
+            # Phase 2: interaction dwell (stationary period)
+            if p2_radius < 10.0 and p2_dur >= 2.0:
+                score += 1.5
+                evidence_details.append(f"Stationary interaction dwell: {round(p2_dur, 1)}s (radius: {round(p2_radius, 1)}%)")
+            elif p2_radius < 15.0 and p2_dur >= 1.5:
+                score += 0.75
+
+            # Crouching posture bonus (common in bike/vehicle theft)
+            if is_crouching:
+                score += 0.75
+                evidence_details.append(f"Low posture / crouching detected (aspect: {round(p2_aspect, 2)})")
+
+            # Phase 3: rapid departure
+            if p3_speed > 8.0 and p3_disp > 5.0:
+                score += 1.5
+                evidence_details.append(f"Rapid departure: {round(p3_speed, 1)}%/s, displacement {round(p3_disp, 1)}%")
+            elif p3_disp > 5.0 or departed_at_edge:
+                score += 0.75
+                evidence_details.append(f"Subject departed zone (edge exit: {departed_at_edge})")
+
+            # Temporal model corroboration: strong boost
+            if temporal_theft_signal:
+                score += 2.0
+                evidence_details.append(f"Temporal R(2+1)D-18 model corroborates: Stealing/Theft ({round(temporal_theft_conf, 1)}% confidence)")
+
+            # Threshold: need at least 3.0 score to flag as theft
+            # (approach + dwell + departure = 4.0 max without temporal)
+            # (temporal alone + minimal motion = 2.0 + 0.5 = 2.5, still cautious)
+            min_threshold = 2.5 if temporal_theft_signal else 3.5
+
+            if score >= min_threshold:
+                conf = min(0.92, round(0.55 + (score / 10.0) * 0.35, 2))
+                if temporal_theft_signal:
+                    conf = min(0.95, conf + 0.10)
+
+                interaction_start = phase2[0].get("timestamp_sec", first_seen)
+                interaction_end = phase3[-1].get("timestamp_sec", last_seen)
+
+                results.append({
+                    "action": "Vehicle Theft / Tampering Suspected",
+                    "primary_entity_id": entity_id,
+                    "start_time_sec": interaction_start,
+                    "end_time_sec": interaction_end,
+                    "severity": "CRITICAL",
+                    "activity_confidence": conf,
+                    "event_confidence": conf,
+                    "description": (
+                        f"Behavioral theft pattern detected for {entity_id}: "
+                        f"approach phase ({round(p1_disp, 1)}% displacement), "
+                        f"stationary interaction/tampering ({round(p2_dur, 1)}s dwell, {round(p2_radius, 1)}% radius"
+                        f"{', crouching posture' if is_crouching else ''}), "
+                        f"followed by {'rapid ' if p3_speed > 8.0 else ''}departure "
+                        f"({round(p3_disp, 1)}% displacement). "
+                        + (f"Corroborated by temporal video model (Stealing/Theft at {round(temporal_theft_conf, 1)}% confidence). " if temporal_theft_signal else "")
+                        + f"Evidence chain: {'; '.join(evidence_details)}."
+                    ),
+                    "is_suspicious": True,
+                    "theft_heuristic_score": round(score, 2),
+                    "temporal_corroboration": temporal_theft_signal,
+                })
+
+        return results
